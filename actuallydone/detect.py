@@ -267,7 +267,8 @@ def cmd_init(args) -> int:
     print("  2. adone doctor         拿配置对现实核一遍")
     print("  3. adone gate run       跑一次门禁，看实际覆盖率，再回填 threshold")
     print('  4. adone integrity --accept-baseline "建立初始基线"')
-    print("  5. adone install        装技能与钩子（Cursor）")
+    # 写 install 而不写 install --with-hooks，照着做的人会以为钩子装上了，其实没有
+    print("  5. adone install --with-hooks   装技能与钩子（Cursor）")
     return 0
 
 
@@ -317,6 +318,12 @@ def cmd_doctor(cfg: Config, args) -> int:
 
     if cfg.get("coverage.threshold") is None:
         problems.append("没配 coverage.threshold：覆盖率不参与门禁判定")
+
+    from .install import hooks_report
+    hook_lines, hook_problems = hooks_report(cfg)
+    for line in hook_lines:
+        print(line)
+    problems += hook_problems
 
     print()
     if not problems:

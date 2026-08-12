@@ -95,7 +95,7 @@ python3 bin/adone --version
 ```bash
 cd 你的项目
 adone init                    # 探测生态、测试命令、文档位置，生成 adone.toml
-adone doctor                  # 拿配置对现实核一遍：路径在不在、命令跑不跑得动
+adone doctor                  # 拿配置对现实核一遍：路径在不在、命令跑不跑得动、钩子还灵不灵
 adone gate run                # 跑一次门禁，看实际覆盖率，回填 coverage.threshold
 adone integrity --accept-baseline "建立初始基线"
 adone install --with-hooks    # 把技能与钩子装进 .cursor/
@@ -127,7 +127,7 @@ adone health                  # 出一页健康度报告
 
 | 命令 | 做什么 | 耗时 |
 | --- | --- | --- |
-| `adone init` / `detect` / `doctor` | 探测、生成配置、拿配置对现实核 | 秒级 |
+| `adone init` / `detect` / `doctor` | 探测、生成配置、拿配置对现实核（含已装钩子还能不能用） | 秒级 |
 | `adone gate run` | 真跑门禁并写回执 | 取决于你的测试 |
 | `adone gate check` | 复核回执是否新鲜且全绿，含契约与假绿检测 | 秒级 |
 | `adone gate hash` | 打印当前受监视代码树的哈希与文件数 | 秒级 |
@@ -136,7 +136,7 @@ adone health                  # 出一页健康度报告
 | `adone health --all` | 重跑门禁再体检 | 分钟级 |
 | `adone health --with-probes` | 加跑业务不变量探针（可能要服务在跑、可能写库） | 取决于探针 |
 | `adone requirements init` / `check` | 从需求源生成台账骨架 / 核验证据锚点 | 秒级 |
-| `adone install` | 渲染技能与钩子模板到项目 | 秒级 |
+| `adone install` | 渲染技能与钩子模板到项目；`--hooks-only` 只重装钩子 | 秒级 |
 
 ## 六个维度
 
@@ -264,8 +264,18 @@ class RustAdapter(Adapter):
 钩子进程的 PATH 由客户端决定，不由你决定（实测拿到过一个既没有 `~/.local/bin`、
 python3 还是 3.10 的环境）。所以钩子按 `仓库内免安装入口 → 安装时记下的 adone 绝对路径 →
 PATH → ~/.local/bin 等常见落点` 逐个找，全找不到就推「找不到 adone」回来。
-换了 adone 的装法之后，用 `adone install --hooks-only --force` 重渲钩子——
-它一个技能文件都不碰，不会把你写进技能里的项目私货冲掉。
+`afterFileEdit` 那个钩子解析 payload 优先用 `jq`，没有就用 `python3`，两个都没有时
+往 `hook.log` 记一笔——**它绝不会一声不吭地什么都不记**，因为一个永远为空的 `dirty`
+和一个从没被改过的仓库长得一模一样。
+
+换了 adone 的装法之后，用 `adone install --hooks-only --force` 重渲钩子：
+它一个技能文件都不碰，不会把你写进技能里的项目私货冲掉；`.cursor/hooks.json`
+是**合并**而不是覆盖，你自己配的其他钩子会原样留着。
+
+装完之后钩子会不会失效，交给 `adone doctor` 定期核：脚本还在不在、可执行位还在不在、
+`hooks.json` 里登记了没有、钩子里烧的那条 adone 路径现在还找不找得到、
+配置改了而钩子还是旧的（比如 `state_dir` 换了，钩子还在往老地方写）。
+这些都是钩子静默失效的真实形态——不主动去核，你不会知道。
 
 ## 自测
 
