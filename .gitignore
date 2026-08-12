@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+.venv/
+
+# 机器写的状态。唯独 test-baseline.json 要入库：
+# 谁在什么时候放宽了哪条测试标准，是需要留痕的事实，不是临时产物。
+.adone/
+!.adone/test-baseline.json

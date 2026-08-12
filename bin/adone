@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""免安装入口：不用 pip 也能跑。
+
+钩子与 CI 都走这个文件而不是 `adone` 命令——目标项目里没装包的时候，
+钩子直接哑掉比报错更糟：它会让「门禁没拦住」看起来像「门禁通过了」。
+
+`#!/usr/bin/env python3` 解析到哪个解释器完全看调用方的 PATH（钩子里常常是
+另一个 Python），所以先让 bootstrap 确认它够不够新，不够就换一个再跑。
+"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from actuallydone.bootstrap import ensure_modern_python  # noqa: E402
+
+ensure_modern_python(__file__)   # 这行之后才敢 import 用到 3.11 特性的模块
+
+from actuallydone.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

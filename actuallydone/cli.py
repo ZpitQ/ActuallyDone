@@ -1,0 +1,184 @@
+"""命令行入口。
+
+子命令里的重活都是懒导入的：`adone init` 不该因为健康度维度里某个模块出问题而起不来，
+而且钩子每次会话都要跑 `gate check`，启动时间是要计较的。
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+from . import __version__
+from .config import Config, ConfigError
+
+
+def _cfg(args) -> Config:
+    from pathlib import Path
+    root = Path(args.root).resolve() if getattr(args, "root", None) else None
+    return Config.load(root)
+
+
+# --------------------------------------------------------------------------- 子命令
+
+def cmd_init(args) -> int:
+    from .detect import cmd_init as run
+    return run(args)
+
+
+def cmd_detect(args) -> int:
+    from .detect import cmd_detect as run
+    return run(args)
+
+
+def cmd_doctor(args) -> int:
+    from .detect import cmd_doctor as run
+    return run(_cfg(args), args)
+
+
+def cmd_gate_run(args) -> int:
+    from .gate import run_gate
+    return run_gate(_cfg(args), skip=args.skip or [])
+
+
+def cmd_gate_check(args) -> int:
+    from .gate import check_gate
+    return check_gate(_cfg(args), as_json=args.json, explain=args.explain,
+                      with_integrity=not args.no_integrity)
+
+
+def cmd_gate_hash(args) -> int:
+    from .gate import tree_hash
+    cfg = _cfg(args)
+    h, n = tree_hash(cfg)
+    print(f"{h}  {n} 个文件")
+    return 0
+
+
+def cmd_gate_contract(args) -> int:
+    from .contracts import verify_only
+    return verify_only(_cfg(args))
+
+
+def cmd_integrity(args) -> int:
+    from .integrity import cmd_integrity as run
+    return run(_cfg(args), args)
+
+
+def cmd_health(args) -> int:
+    from .health import cmd_health as run
+    return run(_cfg(args), args)
+
+
+def cmd_requirements(args) -> int:
+    from .ledger import cmd_requirements as run
+    return run(_cfg(args), args)
+
+
+def cmd_install(args) -> int:
+    from .install import cmd_install as run
+    return run(_cfg(args), args)
+
+
+# --------------------------------------------------------------------------- 装配
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        prog="adone",
+        description="ActuallyDone：完成门禁、假绿检测与项目健康度报告",
+        epilog="没有配置文件时先跑 adone init。文档：README.md")
+    ap.add_argument("--version", action="version", version=f"actuallydone {__version__}")
+    ap.add_argument("--root", help="项目根，默认从当前目录往上找 adone.toml")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("init", help="探测项目并生成 adone.toml")
+    p.add_argument("--force", action="store_true", help="覆盖已存在的配置")
+    p.add_argument("--root", help="项目根，默认当前目录")
+    p.add_argument("--yes", action="store_true", help="不交互，直接采纳探测结果")
+    p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("detect", help="重新探测项目结构（默认只打印，不改配置）")
+    p.add_argument("--write", action="store_true", help="把探测结果写回 adone.toml")
+    p.add_argument("--root", help="项目根")
+    p.set_defaults(func=cmd_detect)
+
+    p = sub.add_parser("doctor", help="拿配置对现实核一遍")
+    p.set_defaults(func=cmd_doctor)
+
+    p_gate = sub.add_parser("gate", help="完成门禁：执行检查并产出回执")
+    gsub = p_gate.add_subparsers(dest="sub", required=True)
+
+    g = gsub.add_parser("run", help="跑全量门禁并写回执")
+    g.add_argument("--skip", action="append", metavar="步骤名",
+                   help="跳过某一步（回执会被标记为不完整，check 仍会拒绝）")
+    g.set_defaults(func=cmd_gate_run)
+
+    g = gsub.add_parser("check", help="校验回执是否新鲜且全绿")
+    g.add_argument("--json", action="store_true", help="供钩子消费")
+    g.add_argument("--explain", action="store_true", help="附带每一步的判定依据")
+    g.add_argument("--no-integrity", action="store_true", help="不跑假绿检测")
+    g.set_defaults(func=cmd_gate_check)
+
+    g = gsub.add_parser("hash", help="打印当前受监视代码树的哈希")
+    g.set_defaults(func=cmd_gate_hash)
+
+    g = gsub.add_parser("verify-contract", help="只校验验收契约")
+    g.set_defaults(func=cmd_gate_contract)
+
+    p = sub.add_parser("integrity", help="假绿检测：抓「把门禁改绿」而不是「把代码改对」")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--accept-baseline", metavar="理由",
+                   help="把当前状态记为新基线，理由会连同时间一起入账")
+    p.set_defaults(func=cmd_integrity)
+
+    p = sub.add_parser("health", help="体检：六个维度汇成一页 HTML")
+    p.add_argument("--all", action="store_true", help="重跑全量门禁，而不是读最新回执")
+    p.add_argument("--only", help="只跑这些维度，逗号分隔")
+    p.add_argument("--skip", help="排除这些维度，逗号分隔")
+    p.add_argument("--with-probes", action="store_true",
+                   help="加跑自定义探针（可能要服务在跑、可能会写库）")
+    p.add_argument("--list", action="store_true", help="列出维度与各自成本")
+    p.add_argument("--json", action="store_true", help="结果打到 stdout")
+    p.add_argument("--out", help="报告路径，默认 <state_dir>/report.html")
+    p.add_argument("--open", action="store_true", help="生成后打开")
+    p.set_defaults(func=cmd_health)
+
+    p = sub.add_parser("requirements", help="需求台账")
+    rsub = p.add_subparsers(dest="sub", required=True)
+    r = rsub.add_parser("init", help="从需求源生成台账骨架")
+    r.add_argument("--force", action="store_true", help="覆盖已存在的台账")
+    r.set_defaults(func=cmd_requirements)
+    r = rsub.add_parser("check", help="核验台账里的证据锚点")
+    r.set_defaults(func=cmd_requirements)
+
+    p = sub.add_parser("install", help="把技能与钩子模板装进项目")
+    p.add_argument("--target", default="cursor", choices=["cursor", "dir"],
+                   help="装到哪个 Agent 平台；dir 表示只写到 --skills-dir")
+    p.add_argument("--skills-dir", help="覆盖配置里的技能目录")
+    p.add_argument("--with-hooks", action="store_true", help="同时写入钩子配置")
+    p.add_argument("--hooks-only", action="store_true",
+                   help="只重装钩子，一个技能文件都不碰（隐含 --with-hooks）；"
+                        "换了 adone 的装法之后重渲钩子用这个，别拿 --force 冲掉技能里的项目私货")
+    p.add_argument("--only", help="只装这几个技能，逗号分隔")
+    p.add_argument("--force", action="store_true", help="覆盖已存在的技能文件")
+    p.add_argument("--dry-run", action="store_true", help="只说要做什么，不落盘")
+    p.set_defaults(func=cmd_install)
+
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = build_parser()
+    args = ap.parse_args(argv)
+    try:
+        return args.func(args)
+    except ConfigError as e:
+        print(f"配置有问题：{e}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print("\n中断。", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())
