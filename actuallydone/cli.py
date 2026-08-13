@@ -44,7 +44,8 @@ def cmd_gate_run(args) -> int:
 def cmd_gate_check(args) -> int:
     from .gate import check_gate
     return check_gate(_cfg(args), as_json=args.json, explain=args.explain,
-                      with_integrity=not args.no_integrity)
+                      with_integrity=not args.no_integrity,
+                      spotcheck=args.spotcheck or 0)
 
 
 def cmd_gate_hash(args) -> int:
@@ -62,6 +63,11 @@ def cmd_gate_contract(args) -> int:
 
 def cmd_integrity(args) -> int:
     from .integrity import cmd_integrity as run
+    return run(_cfg(args), args)
+
+
+def cmd_policy(args) -> int:
+    from .policy import cmd_policy as run
     return run(_cfg(args), args)
 
 
@@ -117,6 +123,10 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--json", action="store_true", help="供钩子消费")
     g.add_argument("--explain", action="store_true", help="附带每一步的判定依据")
     g.add_argument("--no-integrity", action="store_true", help="不跑假绿检测")
+    g.add_argument("--spotcheck", nargs="?", type=int, const=2, default=0,
+                   metavar="N",
+                   help="抽 N 条（默认 2）回执里声称通过的用例当场真跑一遍；"
+                        "默认不开，交付前或 CI 里显式开")
     g.set_defaults(func=cmd_gate_check)
 
     g = gsub.add_parser("hash", help="打印当前受监视代码树的哈希")
@@ -130,6 +140,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--accept-baseline", metavar="理由",
                    help="把当前状态记为新基线，理由会连同时间一起入账")
     p.set_defaults(func=cmd_integrity)
+
+    p = sub.add_parser("policy", help="判据锁：门禁自己有没有被悄悄放松")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--accept", metavar="理由",
+                   help="把当前判据记为新基线，理由会连同时间一起入账")
+    p.set_defaults(func=cmd_policy)
 
     p = sub.add_parser("health", help="体检：六个维度汇成一页 HTML")
     p.add_argument("--all", action="store_true", help="重跑全量门禁，而不是读最新回执")

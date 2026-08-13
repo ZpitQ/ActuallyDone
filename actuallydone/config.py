@@ -175,6 +175,14 @@ class Config:
         return self.state_dir / "test-baseline.json"
 
     @property
+    def policy_baseline(self) -> Path:
+        return self.state_dir / "policy-baseline.json"
+
+    @property
+    def chain(self) -> Path:
+        return self.state_dir / "chain.json"
+
+    @property
     def cover_out(self) -> Path:
         return self.state_dir / "cover.out"
 

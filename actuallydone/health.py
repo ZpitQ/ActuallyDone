@@ -102,7 +102,10 @@ def cmd_health(cfg: Config, args) -> int:
 
     out = Path(args.out).resolve() if args.out else cfg.report
     out.parent.mkdir(parents=True, exist_ok=True)
-    render(results, out, total, [r.key for r in ran], DIMENSIONS, cfg.name)
+    # 「总分 91」这种数字自带可信度暗示，把它是怎么来的写在同一屏里
+    from .gate import evidence_line, load_latest
+    render(results, out, total, [r.key for r in ran], DIMENSIONS, cfg.name,
+           evidence_line(load_latest(cfg)))
 
     n_err = sum(r.errors for r in ran)
     n_warn = sum(r.warnings for r in ran)

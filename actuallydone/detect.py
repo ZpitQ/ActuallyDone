@@ -316,6 +316,18 @@ def cmd_doctor(cfg: Config, args) -> int:
     else:
         problems.append('还没有假绿检测基线，跑 adone integrity --accept-baseline "建立初始基线"')
 
+    from .policy import BaselineBroken, load_baseline
+    try:
+        pol = load_baseline(cfg)
+    except BaselineBroken as e:
+        problems.append(f"判据锁基线坏了：{e}")
+    else:
+        if pol:
+            print(f"  判据基线：{cfg.policy_baseline.relative_to(cfg.root)}"
+                  f"（{pol.get('created_at')}「{pol.get('reason')}」）")
+        else:
+            print("  判据基线：还没有，跑一次 adone gate run 会自动建立")
+
     if cfg.get("coverage.threshold") is None:
         problems.append("没配 coverage.threshold：覆盖率不参与门禁判定")
 

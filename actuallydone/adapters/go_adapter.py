@@ -7,8 +7,8 @@ import subprocess
 from pathlib import Path
 
 from ..model import FuncBody, TestResult
-from .base import (CAP_COVERAGE, CAP_FUNCS, CAP_ROUTES, CAP_TESTS, Adapter,
-                   brace_funcs, read)
+from .base import (CAP_COVERAGE, CAP_FUNCS, CAP_ROUTES, CAP_SINGLE_TEST,
+                   CAP_TESTS, Adapter, brace_funcs, read)
 
 # 必须带 re.M：go test 的结果行散布在多行输出里，少了它 findall 只会看字符串开头，
 # 解析出 0 个用例——而 0 个用例又长得很像「测试没跑」，会把门禁引向错误结论。
@@ -39,7 +39,7 @@ def func_name(decl: str) -> str:
 
 class GoAdapter(Adapter):
     name = "go"
-    caps = {CAP_TESTS, CAP_COVERAGE, CAP_FUNCS, CAP_ROUTES}
+    caps = {CAP_TESTS, CAP_COVERAGE, CAP_FUNCS, CAP_ROUTES, CAP_SINGLE_TEST}
     markers = ("go.mod", "*/go.mod")
     source_exts = (".go",)
 
@@ -86,6 +86,14 @@ class GoAdapter(Adapter):
         for p in self.test_files(roots):
             names |= set(TESTFUNC_RE.findall(read(p)))
         return names
+
+    def single_test_argv(self, name: str) -> list[str] | None:
+        # 子测试名（TestX/case_1）里的斜杠是 -run 的分隔符，只按顶层跑，
+        # 上层核对 --- PASS 时也只认顶层，两边口径一致
+        top = name.split("/")[0]
+        if not top:
+            return None
+        return ["go", "test", "./...", "-run", f"^{top}$", "-count=1", "-v"]
 
     def iter_test_funcs(self, path: Path) -> list[FuncBody]:
         return [f for f in brace_funcs(read(path).splitlines(), FUNC_START, func_name)

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .base import (CAP_COVERAGE, CAP_FUNCS, CAP_ROUTES, CAP_TABLES, CAP_TESTS,
-                   CAP_VIEWS, Adapter)
+from .base import (CAP_COVERAGE, CAP_FUNCS, CAP_ROUTES, CAP_SINGLE_TEST,
+                   CAP_TABLES, CAP_TESTS, CAP_VIEWS, Adapter)
 from .go_adapter import GoAdapter
 from .node_adapter import NodeAdapter
 from .python_adapter import PythonAdapter
@@ -23,7 +23,7 @@ REGISTRY: dict[str, type[Adapter]] = {
 }
 
 __all__ = ["REGISTRY", "get", "detect_all", "Adapter", "CAP_TESTS", "CAP_COVERAGE",
-           "CAP_FUNCS", "CAP_ROUTES", "CAP_TABLES", "CAP_VIEWS"]
+           "CAP_FUNCS", "CAP_ROUTES", "CAP_TABLES", "CAP_VIEWS", "CAP_SINGLE_TEST"]
 
 
 def get(name: str, root: Path) -> Adapter:

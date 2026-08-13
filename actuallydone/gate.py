@@ -3,10 +3,13 @@
 「完成」的唯一口径是：存在一份回执，它的树哈希等于当前代码的树哈希，且其中每一步都通过。
 Agent 贴的日志、勾的清单、说的话都不算数——回执由本模块写，哈希由本模块算。
 
+回执还带自哈希与指向上一份的 `prev`，链头在 `.adone/chain.json`：手写一份全绿回执
+从此要重算自哈希、改链头、让 prev 追得到，而链头变动在 git diff 里显眼。
+
 诚实的边界：这套机制**提高伪造成本，不是密码学级不可伪造**。
-能写文件的人理论上能伪造回执 JSON。缓解是回执内容含树哈希与命令输出，
-任何人可以用 `adone gate check --explain` 独立复核。要做到真正不可伪造，
-需要一个 Agent 无权写入的执行者（CI）。
+能写文件的人理论上能重算整条链。缓解是回执内容含树哈希与命令输出，
+任何人可以用 `adone gate check --explain` 独立复核、`--spotcheck` 当场抽跑。
+要做到真正不可伪造，需要一个 Agent 无权写入的执行者（CI）。
 """
 
 from __future__ import annotations
@@ -178,7 +181,14 @@ def run_gate(cfg: Config, skip: list[str] | None = None) -> int:
         print(f"  [{'通过' if cov_step.ok else '不通过'}] 覆盖率  {cov_step.note}",
               flush=True)
 
+    from .policy import ensure_baseline, snapshot, snapshot_hash
+
     h, n = tree_hash(cfg)
+    said = ensure_baseline(cfg, load_latest(cfg))
+    if said:
+        print(f"\n{said}")
+    pol = _policy_baseline_or_none(cfg)
+    prev = chain_head(cfg)
     receipt = {
         "tool": "actuallydone",
         "id": datetime.now().strftime("%Y%m%d-%H%M%S"),
@@ -188,14 +198,22 @@ def run_gate(cfg: Config, skip: list[str] | None = None) -> int:
         "tree": {"hash": h, "file_count": n,
                  "roots": cfg.get("gate.watch_roots"),
                  "exts": sorted(cfg.get("gate.watch_exts"))},
+        "policy": {"hash": snapshot_hash(snapshot(cfg)),
+                   "baseline_hash": (pol or {}).get("hash"),
+                   "baseline_reason": (pol or {}).get("reason")},
         "tests": (tests or TestResult(parsed=False)).as_dict(),
         "coverage": {"percent": coverage, "threshold": thr},
         "steps": [s.as_receipt() for s in steps],
         "ok": bool(steps) and all(s.ok for s in steps),
+        "seq": prev.get("seq", 0) + 1,
+        "prev": prev.get("head"),
     }
+    receipt["evidence"] = evidence_of(cfg, receipt)
+    receipt["self_hash"] = self_hash(receipt)
     path = cfg.receipts_dir / f"receipt-{receipt['id']}.json"
     path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
     shutil.copyfile(path, cfg.latest_receipt)
+    write_chain_head(cfg, receipt)
     cfg.dirty.unlink(missing_ok=True)
     prune_receipts(cfg)
 
@@ -214,6 +232,128 @@ def prune_receipts(cfg: Config) -> None:
     keep = int(cfg.get("gate.keep_receipts", 20) or 20)
     for p in sorted(cfg.receipts_dir.glob("receipt-*.json"), reverse=True)[keep:]:
         p.unlink(missing_ok=True)
+
+
+# --------------------------------------------------------------------------- 证据链
+
+def self_hash(receipt: dict) -> str:
+    """回执对自己内容的哈希（不含该字段本身）。
+
+    手写一份回执从此不再是「填一个树哈希」：还得把这个数算对、把链头改掉、
+    让 prev 对得上。挡不住铁了心重算整条链的人，但那已经不是顺手绕过了。
+    """
+    body = {k: v for k, v in receipt.items() if k != "self_hash"}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def chain_head(cfg: Config) -> dict:
+    if not cfg.chain.exists():
+        return {}
+    try:
+        data = json.loads(cfg.chain.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def write_chain_head(cfg: Config, receipt: dict) -> None:
+    cfg.chain.write_text(json.dumps({
+        "head": receipt["self_hash"],
+        "seq": receipt["seq"],
+        "receipt_id": receipt["id"],
+        "updated_at": receipt["created_at"],
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def chain_problems(cfg: Config, receipt: dict | None) -> tuple[list[str], list[str]]:
+    """校验最新回执与链头。返回（问题，依据）。
+
+    升级前写的回执没有这些字段，按「早于链机制」处理并给一句提示——
+    否则所有已装项目一升级就全红，那只会让人把这套检查关掉。
+    """
+    if receipt is None:
+        return [], []
+    if "self_hash" not in receipt:
+        head = chain_head(cfg)
+        if head:
+            # 链已经建起来了还冒出一份链外回执：不是升级遗留，是有人把 latest.json 换了
+            return ([f"这份回执不在证据链上，而本仓库的链头已经指到回执 "
+                     f"{head.get('receipt_id')}（第 {head.get('seq')} 环）："
+                     f"latest.json 被换成了一份更老的回执"], [])
+        return [], ["这份回执早于证据链机制（重跑一次 adone gate run 即可纳入链）"]
+
+    problems: list[str] = []
+    if self_hash(receipt) != receipt["self_hash"]:
+        problems.append("回执的自哈希对不上：内容被改过（或被手写过），它不能作为证据")
+        return problems, []
+
+    head = chain_head(cfg)
+    if not head:
+        problems.append("证据链头（chain.json）不见了：无法确认这份回执是不是最新的那一份")
+    elif head.get("head") != receipt["self_hash"]:
+        problems.append(f"回执与证据链头对不上（链头指向回执 {head.get('receipt_id')}）："
+                        f"latest.json 被换过")
+    prev = receipt.get("prev")
+    if prev:
+        older = _find_receipt_by_hash(cfg, prev)
+        if older is None and _receipts_on_disk(cfg) >= int(cfg.get("gate.keep_receipts", 20) or 20):
+            pass   # 老回执被 prune 掉了，正常
+        elif older is None:
+            problems.append(f"上一份回执（自哈希 {str(prev)[:12]}）在 receipts/ 里找不到："
+                            f"证据链断了，中间那份被删或被改过")
+    details = [f"证据链第 {receipt.get('seq', '?')} 环，自哈希 {receipt['self_hash'][:12]}"]
+    return problems, details
+
+
+def _receipts_on_disk(cfg: Config) -> int:
+    return len(list(cfg.receipts_dir.glob("receipt-*.json")))
+
+
+def _find_receipt_by_hash(cfg: Config, want: str) -> dict | None:
+    for p in sorted(cfg.receipts_dir.glob("receipt-*.json"), reverse=True):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("self_hash") == want:
+            return data
+    return None
+
+
+def evidence_of(cfg: Config, receipt: dict) -> dict:
+    """这份回执的证据强度。
+
+    先只有「自述」一档：本地跑出来的东西，再怎么自洽也只是自述。
+    字段结构给以后的 git 绑定与 CI 签名留好位置——「总分 91」这种数字
+    自带可信度标签，比在脚注里写一句免责声明管用。
+    """
+    return {
+        "level": "self-reported",
+        "policy_locked": _policy_baseline_or_none(cfg) is not None,
+        "chained": True,
+    }
+
+
+def _policy_baseline_or_none(cfg: Config) -> dict | None:
+    """基线坏了在这里按「没锁」算：真正把它报出来的是 check，不必两处都喊。"""
+    from .policy import BaselineBroken, load_baseline
+    try:
+        return load_baseline(cfg)
+    except BaselineBroken:
+        return None
+
+
+def evidence_line(receipt: dict | None) -> str:
+    if not receipt:
+        return ""
+    ev = receipt.get("evidence") or {}
+    if not ev:
+        return "证据强度：自述（本地跑）· 这份回执早于证据链机制"
+    bits = ["自述（本地跑）" if ev.get("level") == "self-reported" else str(ev.get("level")),
+            "判据已锁" if ev.get("policy_locked") else "判据未锁",
+            "回执链完整" if ev.get("chained") else "不在证据链上"]
+    return "证据强度：" + " · ".join(bits)
 
 
 # --------------------------------------------------------------------------- 校验
@@ -269,15 +409,31 @@ def gate_problems(cfg: Config, receipt: dict | None, now_hash: str,
 
 
 def check_gate(cfg: Config, as_json: bool = False, explain: bool = False,
-               with_integrity: bool = True) -> int:
+               with_integrity: bool = True, spotcheck: int = 0) -> int:
     from .contracts import check_contracts, load_contracts
     from .integrity import integrity_problems
+    from .policy import policy_problems
 
     receipt = load_latest(cfg)
-    now_hash, now_files = tree_hash(cfg)
-    problems, details = gate_problems(cfg, receipt, now_hash)
-    if not problems and receipt is not None:
-        cfg.dirty.unlink(missing_ok=True)  # 改了又改回来，清掉噪音标记
+    try:
+        now_hash, now_files = tree_hash(cfg)
+    except GateError as e:
+        # 算不出树哈希本身就是结论（多半是有人把 watch_roots 缩没了），
+        # 但不能就此崩掉：判据锁与证据链的结论此时恰恰是最该看见的
+        now_hash, now_files = "", 0
+        problems, details = [str(e)], []
+    else:
+        problems, details = gate_problems(cfg, receipt, now_hash)
+        if not problems and receipt is not None:
+            cfg.dirty.unlink(missing_ok=True)  # 改了又改回来，清掉噪音标记
+
+    chain_bad, chain_detail = chain_problems(cfg, receipt)
+    problems.extend(chain_bad)
+    details.extend(chain_detail)
+
+    policy_bad, policy_detail = policy_problems(cfg, receipt)
+    problems.extend(policy_bad)
+    details.extend(policy_detail)
 
     contract_problems = check_contracts(cfg, receipt)
     problems.extend(contract_problems)
@@ -291,12 +447,21 @@ def check_gate(cfg: Config, as_json: bool = False, explain: bool = False,
     if with_integrity:
         problems.extend(integrity_problems(cfg, receipt))
 
+    if spotcheck and receipt is not None:
+        from .spotcheck import spot_check
+        sc_problems, sc_details = spot_check(cfg, receipt, spotcheck)
+        problems.extend(sc_problems)
+        details.extend(sc_details)
+
     ok = not problems
+    line = evidence_line(receipt)
     if as_json:
         print(json.dumps({
             "ok": ok, "problems": problems, "details": details,
             "receipt_id": receipt["id"] if receipt else None,
             "tree_hash": now_hash, "tree_files": now_files,
+            "evidence": (receipt or {}).get("evidence") or {},
+            "evidence_line": line,
         }, ensure_ascii=False))
         return 0 if ok else 1
 
@@ -309,4 +474,6 @@ def check_gate(cfg: Config, as_json: bool = False, explain: bool = False,
     if explain or ok:
         for d in details:
             print(f"  · {d}")
+    if line and (explain or ok):
+        print(line)
     return 0 if ok else 1

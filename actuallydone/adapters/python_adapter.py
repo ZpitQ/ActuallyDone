@@ -7,7 +7,8 @@ import re
 from pathlib import Path
 
 from ..model import FuncBody, TestResult
-from .base import CAP_COVERAGE, CAP_FUNCS, CAP_TESTS, Adapter, read
+from .base import (CAP_COVERAGE, CAP_FUNCS, CAP_SINGLE_TEST, CAP_TESTS, Adapter,
+                   read)
 
 # pytest: "5 passed, 1 skipped, 2 failed in 0.3s"
 PYTEST_SUM_RE = re.compile(
@@ -23,7 +24,7 @@ ASSERT_WORDS = ("assert ", "assertEqual", "assertTrue", "assertRaises", "assertI
 
 class PythonAdapter(Adapter):
     name = "python"
-    caps = {CAP_TESTS, CAP_COVERAGE, CAP_FUNCS}
+    caps = {CAP_TESTS, CAP_COVERAGE, CAP_FUNCS, CAP_SINGLE_TEST}
     markers = ("pyproject.toml", "setup.py", "requirements.txt")
     source_exts = (".py",)
 
@@ -77,6 +78,13 @@ class PythonAdapter(Adapter):
         for p in self.test_files(roots):
             names |= set(DEF_TEST_RE.findall(read(p)))
         return names
+
+    def single_test_argv(self, name: str) -> list[str] | None:
+        if not name:
+            return None
+        if "::" in name:   # pytest 的用例 ID 自己就是定位符
+            return ["python3", "-m", "pytest", "-q", name]
+        return ["python3", "-m", "unittest", "discover", "-v", "-k", name]
 
     def iter_test_funcs(self, path: Path) -> list[FuncBody]:
         return [f for f in self.iter_funcs(path) if f.name.startswith("test")]

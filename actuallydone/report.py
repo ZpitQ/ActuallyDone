@@ -66,6 +66,10 @@ READING = """
     台账里标了已做，但绑定的表/路由/用例已经不存在了。</li>
 <li><b>一致性分两类</b>：两份都自称权威全量的文件必须完全一致（代码质量维度）；
     文档自述是选摘的只查幻影，即「写了但代码里没有」，不要求反向全覆盖（AI 物料维度）。</li>
+<li><b>顶部那行证据强度，管着上面所有数字的可信度</b>。「自述」是指这些结果由本地这台机器
+    自己跑、自己记，能写文件的人就能改；「判据已锁」是指门禁有多严这件事有基线可对；
+    「回执链完整」是指回执自哈希与链头对得上。要更硬的证据，得让一个 Agent 无权写入的
+    执行者（CI）来跑。</li>
 """
 
 
@@ -78,7 +82,7 @@ def tone_of(score: int) -> str:
 
 
 def render(results: list[DimResult], out: Path, total: int, ran_keys: list[str],
-           dims, project: str) -> None:
+           dims, project: str, evidence: str = "") -> None:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     by_key = {d.key: d for d in dims}
     cls_of = {"错误": "err", "警告": "warn", "提示": "tip"}
@@ -151,7 +155,8 @@ def render(results: list[DimResult], out: Path, total: int, ran_keys: list[str],
 <style>{CSS}</style></head><body><div class="wrap">
 <h1>{esc(project)} · 健康度</h1>
 <div class="meta">生成于 {now} · 本轮跑了 {esc('、'.join(ran_keys))} ·
-  由 ActuallyDone 产出，每次运行覆盖本文件</div>
+  由 ActuallyDone 产出，每次运行覆盖本文件<br>
+  {esc(evidence) if evidence else '证据强度：未知（还没有回执）'}</div>
 <div class="cards">{''.join(cards)}</div>
 
 <h2>逐维度</h2>

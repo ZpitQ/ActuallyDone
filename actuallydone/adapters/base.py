@@ -14,6 +14,7 @@ from ..model import FuncBody, TestResult
 
 # 能力名，供上层判断某项检查能不能做
 CAP_TESTS = "tests"            # 能解析测试输出、能列出测试名
+CAP_SINGLE_TEST = "single"     # 能只跑指定的一条用例（抽查真跑用）
 CAP_COVERAGE = "coverage"      # 能从 profile 里算函数级覆盖
 CAP_FUNCS = "funcs"            # 能切分函数体（重复实现检测、无断言检测）
 CAP_ROUTES = "routes"          # 能提取 HTTP 路由字面量
@@ -63,6 +64,10 @@ class Adapter:
 
     def test_files(self, roots: list[Path]) -> list[Path]:
         return []
+
+    def single_test_argv(self, name: str) -> list[str] | None:
+        """只跑这一条用例的命令。做不到就返回 None，上层会标「未评估」。"""
+        return None
 
     def iter_test_funcs(self, path: Path) -> list[FuncBody]:
         """测试文件里的用例函数，供无断言检测用。"""
