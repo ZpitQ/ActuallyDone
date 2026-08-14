@@ -128,17 +128,13 @@ def judge_step(cfg: Config, spec: dict, st: Step) -> TestResult | None:
     return res
 
 
-def run_gate(cfg: Config, skip: list[str] | None = None) -> int:
-    skip = skip or []
-    problems = cfg.problems()
-    if problems:
-        print("配置有问题，门禁不跑（跑了也不算数）：", file=sys.stderr)
-        for p in problems:
-            print(f"  - {p}", file=sys.stderr)
-        return 2
+def execute_steps(cfg: Config, skip: list[str] | None = None) -> dict:
+    """真跑配置里的每一步，返回原始结果，不落任何盘。
 
-    cfg.state_dir.mkdir(parents=True, exist_ok=True)
-    cfg.receipts_dir.mkdir(parents=True, exist_ok=True)
+    `gate run` 与 `audit --rerun` 共用它：复核者要能跑出自己的一份结果，
+    又不能顺手覆盖实现者的回执——那等于把被审的证据抹掉。
+    """
+    skip = skip or []
     started = time.time()
     specs = cfg.get("gate.step", []) or []
     print(f"跑门禁：{len(specs)} 步\n", flush=True)
@@ -181,6 +177,24 @@ def run_gate(cfg: Config, skip: list[str] | None = None) -> int:
         print(f"  [{'通过' if cov_step.ok else '不通过'}] 覆盖率  {cov_step.note}",
               flush=True)
 
+    return {"steps": steps, "tests": tests, "coverage": coverage, "threshold": thr,
+            "complete": not skipped_any, "seconds": round(time.time() - started, 1)}
+
+
+def run_gate(cfg: Config, skip: list[str] | None = None) -> int:
+    problems = cfg.problems()
+    if problems:
+        print("配置有问题，门禁不跑（跑了也不算数）：", file=sys.stderr)
+        for p in problems:
+            print(f"  - {p}", file=sys.stderr)
+        return 2
+
+    cfg.state_dir.mkdir(parents=True, exist_ok=True)
+    cfg.receipts_dir.mkdir(parents=True, exist_ok=True)
+    ran = execute_steps(cfg, skip)
+    steps = ran["steps"]
+    tests, coverage, thr = ran["tests"], ran["coverage"], ran["threshold"]
+
     from .policy import ensure_baseline, snapshot, snapshot_hash
 
     h, n = tree_hash(cfg)
@@ -193,8 +207,8 @@ def run_gate(cfg: Config, skip: list[str] | None = None) -> int:
         "tool": "actuallydone",
         "id": datetime.now().strftime("%Y%m%d-%H%M%S"),
         "created_at": datetime.now().isoformat(timespec="seconds"),
-        "complete": not skipped_any,
-        "seconds": round(time.time() - started, 1),
+        "complete": ran["complete"],
+        "seconds": ran["seconds"],
         "tree": {"hash": h, "file_count": n,
                  "roots": cfg.get("gate.watch_roots"),
                  "exts": sorted(cfg.get("gate.watch_exts"))},
@@ -408,8 +422,13 @@ def gate_problems(cfg: Config, receipt: dict | None, now_hash: str,
     return problems, details
 
 
-def check_gate(cfg: Config, as_json: bool = False, explain: bool = False,
-               with_integrity: bool = True, spotcheck: int = 0) -> int:
+def collect_check(cfg: Config, with_integrity: bool = True,
+                  spotcheck: int = 0) -> dict:
+    """把一次复核的全部判定收成数据，不打印。
+
+    `check` 与 `audit` 共用这一份判定：两条命令口径分家，等于给「换个命令再问一次」
+    留了一条后门。
+    """
     from .contracts import check_contracts, load_contracts
     from .integrity import integrity_problems
     from .policy import policy_problems
@@ -447,20 +466,36 @@ def check_gate(cfg: Config, as_json: bool = False, explain: bool = False,
     if with_integrity:
         problems.extend(integrity_problems(cfg, receipt))
 
+    spotchecked: list[str] = []
     if spotcheck and receipt is not None:
         from .spotcheck import spot_check
         sc_problems, sc_details = spot_check(cfg, receipt, spotcheck)
         problems.extend(sc_problems)
         details.extend(sc_details)
+        spotchecked = sc_details
 
-    ok = not problems
-    line = evidence_line(receipt)
+    return {
+        "ok": not problems, "problems": problems, "details": details,
+        "receipt_id": receipt["id"] if receipt else None,
+        "receipt": receipt,
+        "tree_hash": now_hash, "tree_files": now_files,
+        "evidence": (receipt or {}).get("evidence") or {},
+        "evidence_line": evidence_line(receipt),
+        "spotcheck": spotchecked,
+    }
+
+
+def check_gate(cfg: Config, as_json: bool = False, explain: bool = False,
+               with_integrity: bool = True, spotcheck: int = 0) -> int:
+    got = collect_check(cfg, with_integrity=with_integrity, spotcheck=spotcheck)
+    ok, problems, details = got["ok"], got["problems"], got["details"]
+    line = got["evidence_line"]
     if as_json:
         print(json.dumps({
             "ok": ok, "problems": problems, "details": details,
-            "receipt_id": receipt["id"] if receipt else None,
-            "tree_hash": now_hash, "tree_files": now_files,
-            "evidence": (receipt or {}).get("evidence") or {},
+            "receipt_id": got["receipt_id"],
+            "tree_hash": got["tree_hash"], "tree_files": got["tree_files"],
+            "evidence": got["evidence"],
             "evidence_line": line,
         }, ensure_ascii=False))
         return 0 if ok else 1

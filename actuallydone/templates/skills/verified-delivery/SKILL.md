@@ -1,6 +1,6 @@
 ---
 name: verified-delivery
-description: 防「伪完成」的 Subagent 交付流水线：spec 澄清、implement 实现、test 独立写测、review 评审、verify 全量验证五段，每段带显式验收标准与必须提交的证据。拆分多 Subagent 并行开发、需要保证「自称完成」可验证、或明确调用 verified-delivery 时使用。
+description: 防「伪完成」的 Subagent 交付流水线：spec 澄清、implement 实现、test 独立写测、review 评审、verify 全量验证、audit 换个模型独立复核六段，每段带显式验收标准与必须提交的证据。拆分多 Subagent 并行开发、需要保证「自称完成」可验证、或明确调用 verified-delivery 时使用。
 disable-model-invocation: true
 ---
 
@@ -10,9 +10,10 @@ disable-model-invocation: true
 
 > 不要直接宣称完成，直到你能证明测试是真实运行且通过的（附上测试运行日志），否则视为未完成。
 
-「自称完成」不是完成。每段的产出都要能被下一段用**命令输出**复核。
+「自称完成」不是完成。段与段之间靠**产物**衔接（契约、文件清单、命令输出），
+不靠「上一个 Agent 说它做完了」。
 
-## 五段：spec → implement → test → review → verify
+## 六段：spec → implement → test → review → verify → audit
 
 - **spec**：把需求变成一份 `{{ACCEPTANCE_DIR}}/<任务>.toml` 验收契约（每条是可观察的行为 +
   一个用例名），写法见 [acceptance-contract](../acceptance-contract/SKILL.md)。产出契约本身，不写代码。
@@ -20,8 +21,7 @@ disable-model-invocation: true
 - **test**：**独立上下文**，只拿到契约与被改文件清单，**看不到 implement 的推理过程**。
 - **review**：评审 diff，重点是不变量与本项目的高频 Bug 模式。
 - **verify**：跑门禁，引用回执。
-
-段与段之间靠**产物**衔接（契约、文件清单、命令输出），不靠「上一个 Agent 说它做完了」。
+- **audit**：**换一个会话、最好换一个模型**做独立复核，见 [independent-check](../independent-check/SKILL.md)。
 
 ## 关键设计：test 段必须盲写
 
@@ -104,9 +104,14 @@ implement 与 test 用两个 Subagent，test 段的提示词里**不放实现思
 - [ ] 高风险模块按 references/high-risk.md 完成额外验证
 ```
 
-口径与回执读法见 [completion-gate](../completion-gate/SKILL.md)。**只跑了过滤子集的测试不算数**，
-门禁跑的是全量。判定失败归属时把自己的测试单独跑一遍再下结论——多 Agent 并行改同一个包时
-会看到别人的编译错误。
+口径与回执读法见 [completion-gate](../completion-gate/SKILL.md)。**只跑了过滤子集的测试不算数**，门禁跑的是全量。
+判定失败归属时把自己的测试单独跑一遍再下结论——多 Agent 并行改同一个包时会看到别人的编译错误。
+
+## audit 段：换个人来查
+
+verify 是实现者自己跑的，证明的是「证据自洽」，不是「没人做手脚」。所以最后开一个新会话（换模型更好），
+只给一句 `按 independent-check 独立复核这个仓库的交付：{{REPO_PATH}}`，不给实现过程；未通过原样交回问题清单，
+修完由复核者再核一次，不接受实现者自证已修好。
 
 ## 深入
 

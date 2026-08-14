@@ -183,6 +183,14 @@ class Config:
         return self.state_dir / "chain.json"
 
     @property
+    def audits_dir(self) -> Path:
+        return self.state_dir / "audits"
+
+    @property
+    def latest_audit(self) -> Path:
+        return self.state_dir / "audit.json"
+
+    @property
     def cover_out(self) -> Path:
         return self.state_dir / "cover.out"
 

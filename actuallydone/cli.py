@@ -71,6 +71,16 @@ def cmd_policy(args) -> int:
     return run(_cfg(args), args)
 
 
+def cmd_audit(args) -> int:
+    from .audit import cmd_audit as run
+    return run(_cfg(args), args)
+
+
+def cmd_brief(args) -> int:
+    from .audit import brief
+    return brief(_cfg(args))
+
+
 def cmd_health(args) -> int:
     from .health import cmd_health as run
     return run(_cfg(args), args)
@@ -146,6 +156,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--accept", metavar="理由",
                    help="把当前判据记为新基线，理由会连同时间一起入账")
     p.set_defaults(func=cmd_policy)
+
+    p = sub.add_parser("audit", help="独立复核：给另一个模型用的那条命令（默认开抽查）")
+    p.add_argument("--rerun", action="store_true",
+                   help="不信任实现者的回执，自己把门禁全量跑一遍再比对；"
+                        "产物只写 audits/，不覆盖 latest.json 与证据链")
+    p.add_argument("--spotcheck", type=int, default=None, metavar="N",
+                   help="抽 N 条契约绑定的用例当场真跑，默认 2；0 表示不抽")
+    p.add_argument("--brief", action="store_true", help="只打印复核者简报，不做检查")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_audit)
+
+    p = sub.add_parser("brief", help="复核者冷启动简报：该读什么、跑什么、不许动什么")
+    p.set_defaults(func=cmd_brief)
 
     p = sub.add_parser("health", help="体检：六个维度汇成一页 HTML")
     p.add_argument("--all", action="store_true", help="重跑全量门禁，而不是读最新回执")

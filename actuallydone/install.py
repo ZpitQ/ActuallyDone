@@ -20,7 +20,7 @@ TEMPLATES = Path(__file__).resolve().parent / "templates"
 
 # 随包发布的通用技能（方法通用，内容可参数化）
 GENERIC_SKILLS = ("completion-gate", "acceptance-contract", "test-integrity",
-                  "verified-delivery")
+                  "verified-delivery", "independent-check")
 # 只给骨架的项目专有技能：它们的价值恰恰在于内容是本项目踩出来的
 PROJECT_SKILLS = ("coding-standards", "pr-review-checklist", "test-driven-dev")
 

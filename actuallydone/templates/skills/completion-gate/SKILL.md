@@ -72,11 +72,21 @@ description: 本项目里「完成」的唯一口径——必须有一份树哈�
 判据基线、假绿基线、证据链头三份都建议入库——它们是证据，不是缓存，入库之后
 每一次放松都会出现在 diff 里。
 
+## 交付时把结论交给别人验
+
+你自己跑 `gate check` 证明的是「证据自洽」，而你正是被检者。真正的复核由一个**没参与实现**
+的执行者做：开一个新会话（换个模型更好），让它按
+[independent-check](../independent-check/SKILL.md) 跑 `{{ADONE}} audit`。
+
+你这边要做的只有一件事：**把证据留全**（回执是 `gate run` 产的、判据放松已经 `policy --accept`
+记过账、契约条目绑的是真用例名），然后交出回执 ID 与树哈希——**不要转述你的实现思路**，
+复核者不该看你的推理过程。它跑出的结论落在 `{{STATE_DIR}}/audit.json`，不会覆盖你的回执。
+
 ## 诚实的边界
 
 这套机制**提高伪造成本，不是密码学级不可伪造**。Agent 有写文件权限，理论上能重算整条回执链
 并同步改掉基线。缓解是回执由脚本写、带自哈希与链、内容含树哈希与命令输出，
 任何人可以用 `{{ADONE}} gate check --explain` 独立复核，交付前还可以
-`{{ADONE}} gate check --spotcheck` 抽两条用例当场真跑。
+`{{ADONE}} gate check --spotcheck` 抽两条用例当场真跑、由第二个模型 `{{ADONE}} audit --rerun` 全量重跑。
 要做到真正不可伪造，需要一个 Agent 无权写入的执行者（CI），路径写在
 [verified-delivery/references/sandbox.md](../verified-delivery/references/sandbox.md)。

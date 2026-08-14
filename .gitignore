@@ -5,7 +5,10 @@ dist/
 *.egg-info/
 .venv/
 
-# 机器写的状态。唯独 test-baseline.json 要入库：
-# 谁在什么时候放宽了哪条测试标准，是需要留痕的事实，不是临时产物。
-.adone/
+# 机器写的状态。三份基线要入库：谁在什么时候放宽了什么，是需要留痕的事实，不是临时产物。
+# 注意是 .adone/* 而不是 .adone/——排除目录本身的话 git 根本不会下去看，
+# 后面几行 ! 就一条也不生效（而且它不报错，你以为入库了，其实没有）。
+.adone/*
 !.adone/test-baseline.json
+!.adone/policy-baseline.json
+!.adone/chain.json
