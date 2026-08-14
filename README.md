@@ -19,7 +19,7 @@ adone health        # 六个维度的项目健康度，汇成一页可离线打�
 所以复核这件事不必由写代码的那个模型来做——见[对抗检查](#对抗检查换一个模型来核)。
 
 零第三方依赖，只用 Python 标准库（需要 3.11+，因为用了 `tomllib`）。
-当前版本 **v1.1.0**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.2.0**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -229,6 +229,7 @@ adone health                  # 出一页健康度报告
     policy-baseline.json  #   判据基线：门禁自己有多严
     audits/*.json         #   历次独立复核结论（复核者写，与上面的回执互不覆盖）
     audit.json            #   最新复核结论
+    audit.html            #   最新复核结论的离线 HTML
     report.html  cover.out  dirty  hook.log
   .cursor/skills/…        # adone install 渲染生成（Cursor 只认这个位置）
   .cursor/hooks.json      # adone install --with-hooks 写入
@@ -242,8 +243,9 @@ adone health                  # 出一页健康度报告
 | `adone gate run` | 真跑门禁并写回执 | 取决于你的测试 |
 | `adone gate check` | 复核回执是否新鲜且全绿，含契约、假绿检测、判据锁与回执链 | 秒级 |
 | `adone gate check --spotcheck [N]` | 再抽 N 条（默认 2）声称通过的用例当场真跑 | 取决于用例 |
-| `adone audit` | 独立复核：与 check 同一套判定，但**默认开抽查**、口吻是复核者的、结论另写一份 | 取决于抽查 |
+| `adone audit` | 独立复核：与 check 同一套判定，但**默认开抽查**、口吻是复核者的、结论另写一份（JSON + HTML） | 取决于抽查 |
 | `adone audit --rerun` | 不信任回执时，自己把门禁全量跑一遍再与回执比对 | 取决于你的测试 |
+| `adone audit report` | 把已有 `audit.json` 渲成一页离线 HTML，不重跑检查；`--out` / `--open` | 秒级 |
 | `adone brief` | 复核者的冷启动简报：该读什么、跑什么、不许动什么 | 秒级 |
 | `adone gate hash` | 打印当前受监视代码树的哈希与文件数 | 秒级 |
 | `adone integrity` | 假绿检测；`--accept-baseline "理由"` 记账 | 秒级 |
@@ -269,7 +271,7 @@ adone health                  # 出一页健康度报告
 | 角色 | 跑什么 | 产出 | 不许做 |
 | --- | --- | --- | --- |
 | 实现者 | `adone gate run` / `gate check` | `.adone/latest.json` + 链头 | 无 |
-| 复核者 | `adone brief` / `adone audit` | `.adone/audit.json` + `.adone/audits/*` | `policy --accept`、`integrity --accept-baseline`、改配置与代码 |
+| 复核者 | `adone brief` / `adone audit` / `adone audit report` | `.adone/audit.json` + `audit.html` + `.adone/audits/*` | `policy --accept`、`integrity --accept-baseline`、改配置与代码 |
 
 `audit` 与 `check` 共用同一套判定（口径分家等于给「换个命令再问一次」留后门），
 但有三点刻意的差别：
@@ -316,11 +318,14 @@ adone health                  # 出一页健康度报告
 证据强度：自述（本地跑）· 判据已锁 · 回执链完整 · 已由独立复核者抽 1 条当场真跑
 
 结论写入 .adone/audit.json（不覆盖实现者的回执与证据链）
+HTML 报告：.adone/audit.html
 ```
 
 结论那句话与末行都**如实写明复核者核到了哪一层**：只读证据、抽 N 条真跑、全量重跑是三档不同的
 强度，写成同一句话等于把最弱的一档冒充最强的（`--spotcheck 0` 时那句会变成
 「本次只读证据，没有当场重跑」）。`--json` 输出同样的结论供脚本或 CI 消费。
+给人看的那页是 `.adone/audit.html`（`--out` 改路径，`--open` 生成后打开）；
+已经有结论、只想出 HTML 时跑 `adone audit report`，不重跑检查。
 
 ### 边界
 

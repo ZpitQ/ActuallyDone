@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -131,6 +130,6 @@ def cmd_health(cfg: Config, args) -> int:
         }, ensure_ascii=False, indent=2))
 
     if args.open:
-        opener = "open" if sys.platform == "darwin" else "xdg-open"
-        subprocess.run([opener, str(out)], check=False)
+        from .report import open_report
+        open_report(out)
     return 1 if n_err else 0

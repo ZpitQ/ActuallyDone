@@ -19,10 +19,12 @@ from __future__ import annotations
 import json
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from .config import Config
 from .gate import (GateError, collect_check, evidence_of, execute_steps,
                    load_latest, self_hash, tree_hash)
+from .report import open_report, render_audit
 
 # 复核者不该动的东西：动了就等于自己给自己放行
 FORBIDDEN = (
@@ -94,7 +96,8 @@ def _evidence_line(base: str, rerun: bool, spotcheck: int) -> str:
 
 
 def run_audit(cfg: Config, spotcheck: int = 2, rerun: bool = False,
-              as_json: bool = False) -> int:
+              as_json: bool = False, html_out: str | None = None,
+              html_open: bool = False) -> int:
     got = collect_check(cfg, with_integrity=True, spotcheck=spotcheck)
     problems = list(got["problems"])
     receipt = got["receipt"]
@@ -136,12 +139,22 @@ def run_audit(cfg: Config, spotcheck: int = 2, rerun: bool = False,
     }
     verdict["self_hash"] = self_hash(verdict)
     _write_verdict(cfg, verdict)
+    html_path = _write_html(cfg, verdict, html_out)
+    if html_open:
+        open_report(html_path)
 
     if as_json:
         print(json.dumps(verdict, ensure_ascii=False))
         return 0 if ok else 1
-    _say(cfg, verdict)
+    _say(cfg, verdict, html_path)
     return 0 if ok else 1
+
+
+def _write_html(cfg: Config, verdict: dict, html_out: str | None = None) -> Path:
+    out = Path(html_out).resolve() if html_out else cfg.audit_report
+    out.parent.mkdir(parents=True, exist_ok=True)
+    render_audit(verdict, out, cfg.name)
+    return out
 
 
 def _write_verdict(cfg: Config, verdict: dict) -> None:
@@ -167,7 +180,7 @@ def _how_far(v: dict) -> str:
     return "（本次只读证据，没有当场重跑）"
 
 
-def _say(cfg: Config, v: dict) -> None:
+def _say(cfg: Config, v: dict, html_path: Path | None = None) -> None:
     aud = v["audited_receipt"]
     print(f"\n独立复核（{'重跑门禁' if v['mode'] == 'rerun' else '复核现有回执'}）"
           f"：对照回执 {aud['id'] or '无'}，当前树 {str(v['tree']['hash'])[:12] or '算不出'}"
@@ -183,6 +196,12 @@ def _say(cfg: Config, v: dict) -> None:
     print(v["evidence_line"])
     print(f"\n结论写入 {cfg.latest_audit.relative_to(cfg.root)}"
           f"（不覆盖实现者的回执与证据链）")
+    if html_path is not None:
+        try:
+            shown = html_path.relative_to(cfg.root)
+        except ValueError:
+            shown = html_path
+        print(f"HTML 报告：{shown}")
 
 
 # --------------------------------------------------------------------------- 简报
@@ -210,14 +229,32 @@ def brief(cfg: Config) -> int:
   adone doctor           配置与现实是否一致、钩子还灵不灵
   adone audit            独立复核（默认抽两条契约绑定的用例当场真跑）
   adone audit --rerun    不信任回执时：自己把门禁全量跑一遍再比对
+  adone audit report     把已有结论渲成一页 HTML，不重跑检查
 
 不许做的：
 """ + "\n".join(f"  - {x}" for x in FORBIDDEN) + f"""
 
 报告口径：给出对照的回执 ID、当前树哈希、问题逐条、结论文件路径
-（{rel(cfg.latest_audit)}）。只报告，不修复——修是实现者的事。
+（{rel(cfg.latest_audit)} / {rel(cfg.audit_report)}）。只报告，不修复——修是实现者的事。
 未通过时明说：实现者不能宣称完成。""")
     return 0
+
+
+def cmd_audit_report(cfg: Config, args) -> int:
+    """把已有审计结论渲成 HTML，不重跑检查——被审的证据不能由渲报告改掉。"""
+    if not cfg.latest_audit.is_file():
+        print("还没有审计结论，先跑 adone audit", file=sys.stderr)
+        return 2
+    try:
+        verdict = json.loads(cfg.latest_audit.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        print(f"审计结论读不出来：{e}", file=sys.stderr)
+        return 2
+    out = _write_html(cfg, verdict, getattr(args, "out", None))
+    print(f"HTML 报告：{out}")
+    if getattr(args, "open", False):
+        open_report(out)
+    return 0 if verdict.get("ok") else 1
 
 
 def cmd_audit(cfg: Config, args) -> int:
@@ -227,4 +264,6 @@ def cmd_audit(cfg: Config, args) -> int:
     if n < 0:
         print("--spotcheck 不能是负数", file=sys.stderr)
         return 2
-    return run_audit(cfg, spotcheck=n, rerun=args.rerun, as_json=args.json)
+    return run_audit(cfg, spotcheck=n, rerun=args.rerun, as_json=args.json,
+                     html_out=getattr(args, "out", None),
+                     html_open=getattr(args, "open", False))

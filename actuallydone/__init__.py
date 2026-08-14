@@ -6,5 +6,5 @@
 只依赖 Python 标准库（需要 3.11+ 的 tomllib）。
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __all__ = ["__version__"]

@@ -76,6 +76,11 @@ def cmd_audit(args) -> int:
     return run(_cfg(args), args)
 
 
+def cmd_audit_report(args) -> int:
+    from .audit import cmd_audit_report as run
+    return run(_cfg(args), args)
+
+
 def cmd_brief(args) -> int:
     from .audit import brief
     return brief(_cfg(args))
@@ -165,7 +170,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="抽 N 条契约绑定的用例当场真跑，默认 2；0 表示不抽")
     p.add_argument("--brief", action="store_true", help="只打印复核者简报，不做检查")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--out", help="HTML 报告路径，默认 <state_dir>/audit.html")
+    p.add_argument("--open", action="store_true", help="生成后打开 HTML")
     p.set_defaults(func=cmd_audit)
+    asub = p.add_subparsers(dest="audit_cmd")
+    r = asub.add_parser("report", help="把已有审计结论渲成一页 HTML，不重跑检查")
+    r.add_argument("--out", help="报告路径，默认 <state_dir>/audit.html")
+    r.add_argument("--open", action="store_true", help="生成后打开")
+    r.set_defaults(func=cmd_audit_report)
 
     p = sub.add_parser("brief", help="复核者冷启动简报：该读什么、跑什么、不许动什么")
     p.set_defaults(func=cmd_brief)

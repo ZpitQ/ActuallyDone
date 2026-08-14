@@ -17,7 +17,8 @@ from tests.helpers import ProjectCase
 
 
 def _args(**over) -> Namespace:
-    base = {"json": False, "rerun": False, "spotcheck": None, "brief": False}
+    base = {"json": False, "rerun": False, "spotcheck": None, "brief": False,
+            "out": None, "open": False}
     base.update(over)
     return Namespace(**base)
 
@@ -196,7 +197,7 @@ class TestBrief(AuditCase):
         self.receipt(cfg)
         text = self.brief_text(cfg)
         for want in ("独立复核者", "验收契约", "判据基线", "假绿基线", "证据链头",
-                     "adone audit --rerun", "20260101-000000"):
+                     "adone audit --rerun", "adone audit report", "20260101-000000"):
             self.assertIn(want, text)
 
     def test_简报点名复核者不许自己给自己放行(self):
@@ -234,3 +235,87 @@ class TestAuditCli(AuditCase):
         cfg = self.cfg()
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(audit.cmd_audit(cfg, _args(spotcheck=-1)), 2)
+
+    def test_cli认出audit_report子命令(self):
+        from actuallydone.cli import build_parser
+        args = build_parser().parse_args(["audit", "report", "--out", "x.html"])
+        self.assertEqual(args.func.__name__, "cmd_audit_report")
+        self.assertEqual(args.out, "x.html")
+
+
+class TestAuditHtml(AuditCase):
+    def html(self, cfg: Config) -> str:
+        return cfg.audit_report.read_text(encoding="utf-8")
+
+    def test_跑完审计会写出可离线打开的html(self):
+        cfg = self.cfg()
+        self.receipt(cfg)
+        _, out = self.audit_run(cfg, spotcheck=0)
+        self.assertTrue(cfg.audit_report.is_file(), "该写出 .adone/audit.html")
+        html = self.html(cfg)
+        self.assertIn("独立复核通过", html)
+        self.assertIn("20260101-000000", html)
+        self.assertNotIn("可以宣称完成", html)
+        self.assertNotIn("<script", html)
+        self.assertIn("HTML 报告", out)
+
+    def test_未通过的html写明实现者不能宣称完成(self):
+        cfg = self.cfg()
+        self.receipt(cfg)
+        self.write("internal/calc.go", "package internal\n\n// 跑完门禁又改了一笔\n")
+        self.audit_run(cfg, spotcheck=0)
+        html = self.html(cfg)
+        self.assertIn("实现者不能宣称完成", html)
+        self.assertIn("回执已过期", html)
+        self.assertIn("未通过", html)
+
+    def test_html如实写复核强度且点明同机不是不可伪造(self):
+        cfg = self.cfg()
+        self.receipt(cfg)
+        self.audit_run(cfg, spotcheck=0)
+        html = self.html(cfg)
+        self.assertIn("只读证据", html)
+        self.assertNotIn("抽查的用例当场真跑仍然通过", html)
+        self.assertIn("不是不可伪造", html)
+        self.assertIn("不可能造假", html)
+
+    def test_out指定路径时写到那里(self):
+        cfg = self.cfg()
+        self.receipt(cfg)
+        dest = self.root / "share" / "audit.html"
+        self.audit_run(cfg, spotcheck=0, html_out=str(dest))
+        self.assertTrue(dest.is_file())
+        self.assertIn("独立复核通过", dest.read_text(encoding="utf-8"))
+
+    def test_report命令只渲已有结论不重跑(self):
+        cfg = self.cfg()
+        self.receipt(cfg)
+        self.audit_run(cfg, spotcheck=0)
+        first = json.loads(cfg.latest_audit.read_text(encoding="utf-8"))
+        dest = self.root / "share" / "from-report.html"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = audit.cmd_audit_report(cfg, Namespace(out=str(dest), open=False))
+        self.assertEqual(rc, 0)
+        self.assertTrue(dest.is_file())
+        self.assertIn("独立复核通过", dest.read_text(encoding="utf-8"))
+        again = json.loads(cfg.latest_audit.read_text(encoding="utf-8"))
+        self.assertEqual(again["id"], first["id"])
+        self.assertEqual(again["self_hash"], first["self_hash"])
+
+    def test_还没有结论时report拒绝(self):
+        cfg = self.cfg()
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                audit.cmd_audit_report(cfg, Namespace(out=None, open=False)), 2)
+
+    def test_report对未通过的结论退出码为1(self):
+        cfg = self.cfg()
+        self.receipt(cfg)
+        self.write("internal/calc.go", "package internal\n\n// 过期\n")
+        self.audit_run(cfg, spotcheck=0)
+        dest = self.root / "fail.html"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = audit.cmd_audit_report(cfg, Namespace(out=str(dest), open=False))
+        self.assertEqual(rc, 1)

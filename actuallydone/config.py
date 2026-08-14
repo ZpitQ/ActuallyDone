@@ -203,6 +203,10 @@ class Config:
         return self.state_dir / "report.html"
 
     @property
+    def audit_report(self) -> Path:
+        return self.state_dir / "audit.html"
+
+    @property
     def ecosystems(self) -> list[str]:
         return list(self.get("project.ecosystems", []) or [])
 
