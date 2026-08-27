@@ -13,6 +13,7 @@ import re
 import subprocess
 import time
 
+from ..gate import resolve_cmd
 from ..model import DimResult, Metric
 
 DEFAULT_UNREACHABLE = ("Connection refused", "URLError", "Errno 61", "Max retries",
@@ -35,16 +36,21 @@ def run(ctx) -> DimResult:
         if not argv:
             res.add("警告", "adone.toml", f"探针「{name}」没有 argv")
             continue
+        wd = cfg.root / spec.get("cwd", ".")
+        exe = resolve_cmd(argv[0], wd)
+        if exe is None:
+            res.add("警告", name, f"命令不存在：{argv[0]}")
+            continue
         t0 = time.time()
         try:
-            proc = subprocess.run(argv, cwd=cfg.root / spec.get("cwd", "."),
-                                  capture_output=True, text=True,
+            proc = subprocess.run([exe, *argv[1:]], cwd=wd,
+                                  capture_output=True, text=True, errors="replace",
                                   timeout=float(spec.get("timeout", 600)))
         except subprocess.TimeoutExpired:
             res.add("警告", name, "探针超时，没跑完——这不代表不变量出问题")
             continue
-        except FileNotFoundError as e:
-            res.add("警告", name, f"命令不存在：{e.filename}")
+        except OSError as e:
+            res.add("警告", name, f"命令跑不起来：{argv[0]}（{e.strerror or e}）")
             continue
         out = proc.stdout + proc.stderr
         secs = round(time.time() - t0, 1)

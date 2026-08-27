@@ -89,9 +89,12 @@ class Step:
     output_tail: str = ""
     stdout: str = field(default="", repr=False)
     started_at: float = field(default=0.0, repr=False)
+    # 命令根本没启动起来（找不到、没有执行位）。判定要据此让路，别报成「解析不出输出」
+    launch_error: str = field(default="", repr=False)
 
     def as_receipt(self) -> dict:
-        return {k: v for k, v in vars(self).items() if k not in ("stdout", "started_at")}
+        skip = ("stdout", "started_at", "launch_error")
+        return {k: v for k, v in vars(self).items() if k not in skip}
 
 
 @dataclass

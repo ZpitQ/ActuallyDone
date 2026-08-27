@@ -133,15 +133,24 @@ class JavaAdapter(Adapter):
         return any((base / n).is_file() for n in (
             "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"))
 
+    def _has_wrapper(self, base: Path, name: str) -> bool:
+        """POSIX 上包装器要有执行位；Windows 上它叫 name.cmd / name.bat，执行位无意义。
+
+        配置里一律写 ./mvnw，由 gate.resolve_cmd 在 Windows 上补出 .cmd，
+        这样同一份 adone.toml 两边都跑得动。
+        """
+        if any((base / f"{name}{e}").is_file() for e in (".cmd", ".bat")):
+            return True
+        p = base / name
+        return p.is_file() and os.access(p, os.X_OK)
+
     def _mvn_cmd(self, base: Path) -> list[str]:
-        wrapper = base / "mvnw"
-        if wrapper.is_file() and os.access(wrapper, os.X_OK):
+        if self._has_wrapper(base, "mvnw"):
             return ["./mvnw", "-B", "-ntp"]
         return ["mvn", "-B", "-ntp"]
 
     def _gradle_cmd(self, base: Path) -> list[str]:
-        wrapper = base / "gradlew"
-        if wrapper.is_file() and os.access(wrapper, os.X_OK):
+        if self._has_wrapper(base, "gradlew"):
             return ["./gradlew", "--console=plain"]
         return ["gradle", "--console=plain"]
 

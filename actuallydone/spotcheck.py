@@ -14,6 +14,7 @@ import subprocess
 import time
 
 from .config import Config
+from .gate import resolve_cmd
 
 TIMEOUT = 600
 
@@ -63,10 +64,15 @@ def spot_check(cfg: Config, receipt: dict, n: int) -> tuple[list[str], list[str]
     for name, argv in argvs:
         if argv is None:
             continue
+        exe = resolve_cmd(argv[0], cwd)
+        if exe is None:
+            problems.append(f"抽查用例 {name} 跑不起来：命令 {argv[0]} 在 PATH 与 "
+                            f"{step.get('cwd') or '.'} 下都没找到")
+            continue
         t0 = time.time()
         try:
-            proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
-                                  timeout=TIMEOUT)
+            proc = subprocess.run([exe, *argv[1:]], cwd=cwd, capture_output=True,
+                                  text=True, errors="replace", timeout=TIMEOUT)
         except (OSError, subprocess.TimeoutExpired) as e:
             problems.append(f"抽查用例 {name} 跑不起来（{' '.join(argv)}）：{e}")
             continue

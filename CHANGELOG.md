@@ -2,6 +2,28 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.2 — 2026-08-27
+
+### 修
+
+- **Windows 上 `mvn` / `npm` 一律「命令不存在」**：这两个在 Windows 上是 `.cmd`
+  批处理，而 `CreateProcess` 不查 `PATHEXT`，`subprocess` 直接抛 `FileNotFoundError`；
+  偏偏 `doctor` 用的 `shutil.which` 认 `PATHEXT`，于是「体检说命令在、门禁说命令不存在」。
+  现在门禁、抽查、探针、doctor 全部走同一个 `resolve_cmd`：先解析成带后缀的全路径再执行。
+  `./mvnw` 在 Windows 上会自动对上 `mvnw.cmd`，同一份 `adone.toml` 两边都跑得动。
+- **`命令不存在: None`**：`WinError 2` 的 `e.filename` 是 `None`，报错等于什么都没说。
+  现在报出命令名，并分清「PATH 里没有」与「步骤目录不存在」两种情况。
+- **真实原因被「解析不出测试结果」盖掉**：命令没启动起来时，`kind = "test"` 的判定
+  会把 note 覆写成「适配器不认这种输出格式」，把人引到适配器上去查。现在启动失败的
+  步骤保留原因，不再冒充解析失败。
+- **依赖与构建产物不再进受监视树**：`node_modules`、`target`、`build`、`dist` 等
+  会被裁掉。以前 `watch_roots = ["."]` 能扫出四万多个文件，回执在每次
+  `npm install` / `mvn package` 后就过期，而「回执已过期」本该指向人改了源码。
+  互相嵌套的 `watch_roots`（`"."` 加上几个子模块）也不再把同一个文件算两遍。
+  **注意**：这会让树哈希变一次，已有回执需要重跑一次 `adone gate run`。
+- **Windows 中文 locale 下解码炸掉**：`mvn` 的输出常常不是 `cp936`，
+  解码异常会把「测试失败」误报成「命令跑不起来」。改为 `errors="replace"`。
+
 ## v1.3.1 — 2026-08-27
 
 ### 修

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -23,7 +24,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .config import Config
+from .config import PRUNE_DIRS, Config
 from .model import Step, TestResult
 
 
@@ -33,13 +34,19 @@ def tree_files(cfg: Config) -> list[Path]:
     roots = cfg.get("gate.watch_roots", []) or []
     exts = {e if e.startswith(".") else f".{e}"
             for e in (cfg.get("gate.watch_exts", []) or [])}
-    out: list[Path] = []
+    seen: set[Path] = set()
     for r in roots:
         base = cfg.root / r
         if not base.is_dir():
             continue
-        out.extend(p for p in base.rglob("*") if p.is_file() and p.suffix in exts)
-    return sorted(out)
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [d for d in dirnames if d not in PRUNE_DIRS]
+            here = Path(dirpath)
+            for fn in filenames:
+                if os.path.splitext(fn)[1] in exts:
+                    seen.add(here / fn)
+    # watch_roots 常常互相嵌套（"." 加上几个子模块），去重否则同一个文件哈希两遍
+    return sorted(seen)
 
 
 class GateError(Exception):
@@ -64,21 +71,71 @@ def tree_hash(cfg: Config) -> tuple[str, int]:
 
 # --------------------------------------------------------------------------- 执行
 
+def pathext() -> tuple[str, ...]:
+    """Windows 上可执行文件的后缀。非 Windows 返回空。"""
+    if os.name != "nt":
+        return ()
+    raw = os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD"
+    return tuple(e.lower() for e in raw.split(os.pathsep) if e.strip().startswith("."))
+
+
+def resolve_cmd(cmd: str, cwd: Path, *, exts: tuple[str, ...] | None = None) -> str | None:
+    """把 argv[0] 解析成能直接交给操作系统的路径；找不到返回 None。
+
+    Windows 上 mvn / npm / gradle 都是 .cmd 批处理，而 CreateProcess 不查 PATHEXT，
+    所以 subprocess.run(["mvn", ...]) 会直接 FileNotFoundError（且 e.filename 是 None）。
+    doctor 用的 shutil.which 认 PATHEXT，于是「体检说命令在，门禁说命令不存在」。
+    两边必须走这同一个函数，判断才一致。
+    """
+    exts = pathext() if exts is None else exts
+    seps = [s for s in (os.sep, os.altsep) if s]
+    if any(s in cmd for s in seps):
+        # ./mvnw、bin/x 这种相对路径按步骤 cwd 解析，不查 PATH
+        base = Path(cmd) if Path(cmd).is_absolute() else cwd / cmd
+        for cand in _ext_candidates(base, exts):
+            if cand.is_file() and os.access(cand, os.X_OK):
+                return str(cand)
+        return None
+    # shutil.which 自己会按 PATHEXT 补后缀，拿到带后缀的全路径 CreateProcess 才认
+    return shutil.which(cmd)
+
+
+def _ext_candidates(base: Path, exts: tuple[str, ...]) -> list[Path]:
+    if not exts or base.suffix.lower() in exts:
+        return [base]
+    # Windows 上 mvnw 与 mvnw.cmd 常常并存，前者是 bash 脚本，跑不起来，所以后缀优先
+    return [base.with_name(base.name + e) for e in exts] + [base]
+
+
 def run_step(cfg: Config, spec: dict) -> Step:
     argv = [a.replace("{cover_out}", str(cfg.cover_out)).replace("{root}", str(cfg.root))
             for a in spec["argv"]]
     st = Step(name=spec.get("name") or argv[0], cwd=spec.get("cwd", "."), argv=argv)
+    wd = cfg.root / st.cwd
     t0 = time.time()
     st.started_at = t0
-    try:
-        proc = subprocess.run(argv, cwd=cfg.root / st.cwd, capture_output=True, text=True)
-    except FileNotFoundError as e:
+
+    def dead(msg: str) -> Step:
         st.seconds = round(time.time() - t0, 2)
         st.exit_code = 127
         st.ok = False
-        st.note = f"命令不存在：{e.filename}"
-        st.output_tail = st.note
+        st.launch_error = msg
+        st.note = msg
+        st.output_tail = msg
         return st
+
+    if not wd.is_dir():
+        return dead(f"步骤目录不存在：{spec.get('cwd', '.')}")
+    exe = resolve_cmd(argv[0], wd)
+    if exe is None:
+        return dead(f"命令不存在：{argv[0]}（在 PATH 与 {spec.get('cwd', '.')} 下都没找到）")
+    try:
+        # errors="replace"：Windows 中文 locale 下 mvn 的输出常常不是 cp936，
+        # 解码炸掉会把「测试失败」误报成「跑不起来」
+        proc = subprocess.run([exe, *argv[1:]], cwd=wd, capture_output=True,
+                              text=True, errors="replace")
+    except OSError as e:
+        return dead(f"命令跑不起来：{argv[0]}（{e.strerror or e}）")
     st.seconds = round(time.time() - t0, 2)
     st.exit_code = proc.returncode
     st.stdout = proc.stdout + proc.stderr
@@ -102,14 +159,25 @@ def judge_step(cfg: Config, spec: dict, st: Step) -> TestResult | None:
     if kind != "test":
         return None
 
+    if st.launch_error:
+        # 命令压根没启动。这时候说「解析不出测试结果」会把人引到适配器上去查，
+        # 而真正要修的是 PATH 或步骤目录
+        return None
+
     from .adapters import get
     ad = get(spec.get("adapter") or "", cfg.root)
     res = ad.parse_test_run(st.stdout, cwd=cfg.root / st.cwd,
                             since=st.started_at or None)
     if res is None or not res.parsed:
         st.ok = False
-        st.note = ("解析不出测试结果——要么适配器不认这种输出格式，"
-                   "要么测试根本没跑起来。这种「通过」不能作为证据")
+        if st.exit_code != 0:
+            # 退出码已经说明它失败了，这时候提「这种通过不能作为证据」是自相矛盾，
+            # 还会把人引去查适配器
+            st.note = (f"测试没跑出结果，退出码 {st.exit_code}"
+                       f"——多半是命令本身失败了，看下面的输出")
+        else:
+            st.note = ("退出码 0 但解析不出测试结果——要么适配器不认这种输出格式，"
+                       "要么测试根本没跑起来。这种「通过」不能作为证据")
         return res
 
     for mark in spec.get("invalid_marks", []) or []:

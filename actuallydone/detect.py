@@ -13,14 +13,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .adapters import REGISTRY, detect_all, get
-from .config import CONFIG_NAME, Config
+from .config import CONFIG_NAME, PRUNE_DIRS, Config
 
 # 常见文档位置，命中即作为 AI 物料的必备件候选
 DOC_CANDIDATES = ("AGENT.md", "AGENTS.md", "CLAUDE.md", "README.md",
                   "docs/README.md", "docs/architecture.md", "blueprint/AGENT.md",
                   "blueprint/README.md")
-IGNORE_DIRS = {".git", "node_modules", "vendor", "dist", "build", "__pycache__",
-               ".venv", "venv", "target", ".next", ".adone", ".idea"}
+IGNORE_DIRS = PRUNE_DIRS
 
 
 @dataclass
@@ -220,11 +219,6 @@ def render_config(got: Detected) -> str:
     a('# pass_pattern = "PASS"')
     a('# fail_pattern = "FAIL"')
     return "\n".join(L) + "\n"
-
-
-def _is_rel_cmd(cmd: str) -> bool:
-    """./mvnw 这种相对路径不能拿 shutil.which 查，要按步骤 cwd 解析。"""
-    return cmd.startswith(".") or "/" in cmd or "\\" in cmd
 
 
 def _render_step(s: dict) -> str:
@@ -497,21 +491,21 @@ def cmd_doctor(cfg: Config, args) -> int:
     print(f"体检配置 {cfg.path}：\n")
     problems = cfg.problems()
 
-    # 命令能不能跑得动：路径配对了但工具没装，跑门禁时才发现太晚
-    import shutil
-    from pathlib import Path as P
+    # 命令能不能跑得动：路径配对了但工具没装，跑门禁时才发现太晚。
+    # 必须与 gate.run_step 用同一个解析函数，否则会出现「体检通过、门禁说命令不存在」
+    from .gate import resolve_cmd
     for s in cfg.get("gate.step", []) or []:
         argv = s.get("argv") or []
         if not argv:
             continue
-        cmd = argv[0]
         cwd = cfg.root / (s.get("cwd") or ".")
-        if _is_rel_cmd(cmd):
-            if not (cwd / cmd).exists() and not P(cmd).exists():
-                problems.append(f"gate.step「{s.get('name')}」的命令 {cmd} 在 "
-                                f"{s.get('cwd') or '.'} 下找不到")
-        elif not shutil.which(cmd):
-            problems.append(f"gate.step「{s.get('name')}」的命令 {cmd} 不在 PATH 里")
+        if not cwd.is_dir():
+            problems.append(f"gate.step「{s.get('name')}」的 cwd 目录不存在："
+                            f"{s.get('cwd') or '.'}")
+            continue
+        if resolve_cmd(argv[0], cwd) is None:
+            problems.append(f"gate.step「{s.get('name')}」的命令 {argv[0]} 跑不起来："
+                            f"PATH 与 {s.get('cwd') or '.'} 下都没找到可执行的它")
 
     from .adapters import REGISTRY as R
     eco = cfg.ecosystems

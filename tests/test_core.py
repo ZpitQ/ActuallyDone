@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from actuallydone import bootstrap, contracts, gate, integrity, ledger
 from actuallydone.config import Config, ConfigError, find_root
@@ -92,6 +93,130 @@ class TestTreeHash(ProjectCase):
         before, _ = gate.tree_hash(cfg)
         self.write("internal/readme.md", "随便写点什么")
         self.assertEqual(gate.tree_hash(cfg)[0], before)
+
+    def test_依赖与构建产物不进受监视树(self):
+        # 把 node_modules 算进去，回执会在每次 npm install 后过期，
+        # 而「回执已过期」这句话本该指向人改了源码
+        self.make_node_project()
+        self.write("node_modules/left-pad/index.js", "module.exports = 1\n")
+        self.write("dist/bundle.js", "var a=1\n")
+        self.write("target/generated/Gen.js", "var g=1\n")
+        cfg = self.config(gate={"watch_roots": ["."], "watch_exts": [".js", ".ts"],
+                                "min_tree_files": 1})
+        files = [p.name for p in gate.tree_files(cfg)]
+        self.assertIn("order.ts", files)
+        self.assertNotIn("index.js", files)
+        self.assertNotIn("bundle.js", files)
+        self.assertNotIn("Gen.js", files)
+
+    def test_嵌套的受监视根不会把同一个文件算两遍(self):
+        self.make_go_project()
+        cfg = self.config(gate={"watch_roots": [".", "internal"], "watch_exts": [".go"],
+                                "min_tree_files": 1})
+        files = gate.tree_files(cfg)
+        self.assertEqual(len(files), len(set(files)))
+        self.assertEqual(len(files), 2)
+
+
+class TestCommandResolution(ProjectCase):
+    """Windows 上 mvn / npm 是 .cmd 批处理，CreateProcess 不查 PATHEXT。
+
+    不解析就会 FileNotFoundError，而 doctor 用的 shutil.which 查 PATHEXT 说命令在，
+    于是「体检通过、门禁说命令不存在」。两边必须用同一套解析。
+    """
+
+    WIN_EXTS = (".com", ".exe", ".bat", ".cmd")
+
+    def exe(self, rel: str) -> None:
+        p = self.write(rel, "echo hi\n")
+        p.chmod(0o755)
+
+    def test_Windows下相对路径的包装器补出cmd后缀(self):
+        self.exe("mvnw.cmd")
+        got = gate.resolve_cmd("./mvnw", self.root, exts=self.WIN_EXTS)
+        self.assertIsNotNone(got)
+        self.assertTrue(got.endswith("mvnw.cmd"))
+
+    def test_cmd优先于同名的bash包装器(self):
+        # mvnw 与 mvnw.cmd 常常并存，前者是 bash 脚本，在 Windows 上跑不起来
+        self.exe("mvnw")
+        self.exe("mvnw.cmd")
+        got = gate.resolve_cmd("./mvnw", self.root, exts=self.WIN_EXTS)
+        self.assertTrue(got.endswith("mvnw.cmd"))
+
+    def test_非Windows下不补后缀(self):
+        self.exe("mvnw")
+        got = gate.resolve_cmd("./mvnw", self.root, exts=())
+        self.assertTrue(got.endswith("mvnw"))
+
+    def test_相对路径按步骤目录解析(self):
+        self.exe("mod/gradlew")
+        self.assertIsNotNone(gate.resolve_cmd("./gradlew", self.root / "mod", exts=()))
+        self.assertIsNone(gate.resolve_cmd("./gradlew", self.root, exts=()))
+
+    def test_没有执行位不算找到(self):
+        self.write("mvnw", "echo hi\n")
+        self.assertIsNone(gate.resolve_cmd("./mvnw", self.root, exts=()))
+
+    def test_PATH里的命令解析成全路径(self):
+        got = gate.resolve_cmd("python3", self.root, exts=())
+        self.assertIsNotNone(got)
+        self.assertTrue(Path(got).is_absolute())
+
+    def test_找不到的命令返回None(self):
+        self.assertIsNone(
+            gate.resolve_cmd("绝对不存在的命令-adone", self.root, exts=()))
+
+    def test_命令不存在时报出命令名而不是None(self):
+        # WinError 2 的 e.filename 是 None，直接打出来就是「命令不存在: None」
+        cfg = self.config()
+        st = gate.run_step(cfg, {"name": "mvn test", "cwd": ".",
+                                 "argv": ["绝对不存在的命令-adone", "test"]})
+        self.assertFalse(st.ok)
+        self.assertEqual(st.exit_code, 127)
+        self.assertIn("绝对不存在的命令-adone", st.note)
+        self.assertNotIn("None", st.note)
+
+    def test_步骤目录不存在时说目录而不是命令(self):
+        cfg = self.config()
+        st = gate.run_step(cfg, {"name": "前端测试", "cwd": "没这个目录",
+                                 "argv": ["python3", "-c", "pass"]})
+        self.assertFalse(st.ok)
+        self.assertIn("没这个目录", st.note)
+
+    def test_命令没跑起来时不报成解析不出测试结果(self):
+        # 报「适配器不认这种输出格式」会把人引到适配器上去查，真正要修的是 PATH
+        cfg = self.config()
+        spec = {"name": "mvn test", "cwd": ".", "kind": "test", "adapter": "java",
+                "argv": ["绝对不存在的命令-adone", "test"]}
+        st = gate.run_step(cfg, spec)
+        gate.judge_step(cfg, spec, st)
+        self.assertFalse(st.ok)
+        self.assertIn("命令不存在", st.note)
+        self.assertNotIn("解析不出", st.note)
+
+    def test_启动失败的原因不进回执字段(self):
+        cfg = self.config()
+        st = gate.run_step(cfg, {"name": "x", "cwd": ".", "argv": ["不存在-adone"]})
+        self.assertNotIn("launch_error", st.as_receipt())
+
+    def test_体检与门禁对命令的判断一致(self):
+        import argparse
+        import io
+        from contextlib import redirect_stdout
+
+        from actuallydone.detect import cmd_doctor
+        self.make_go_project()
+        self.write("adone.toml", "version = 1\n")
+        cfg = self.config(gate={
+            "watch_roots": ["internal"], "watch_exts": [".go"], "min_tree_files": 1,
+            "step": [{"name": "mvn test", "cwd": ".",
+                      "argv": ["绝对不存在的命令-adone", "test"], "kind": "test"}]})
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = cmd_doctor(cfg, argparse.Namespace())
+        self.assertNotEqual(rc, 0)
+        self.assertIn("绝对不存在的命令-adone", buf.getvalue())
 
 
 class TestStepJudging(ProjectCase):

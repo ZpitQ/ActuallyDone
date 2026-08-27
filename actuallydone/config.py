@@ -24,6 +24,15 @@ from typing import Any
 
 CONFIG_NAME = "adone.toml"
 
+# 依赖与构建产物：树哈希、重复检测都要跳过。
+# 把 node_modules 与 target 算进受监视树，回执会在每次 npm install / mvn package 后过期，
+# 而「回执已过期」这句话本该指向人改了源码。
+PRUNE_DIRS = frozenset({
+    ".git", ".hg", ".svn", "node_modules", "vendor", "dist", "build", "target",
+    "__pycache__", ".venv", "venv", ".tox", ".mypy_cache", ".pytest_cache",
+    ".next", ".nuxt", ".gradle", ".adone", ".idea", ".vscode",
+})
+
 # 只有「不猜也不会骗人」的值才配出现在这里
 DEFAULTS: dict[str, Any] = {
     "version": 1,
