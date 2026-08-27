@@ -145,6 +145,7 @@ def execute_steps(cfg: Config, skip: list[str] | None = None) -> dict:
     tests: TestResult | None = None
     test_step_name = cfg.get("coverage.source") or ""
     coverage: float | None = None
+    coverage_any: float | None = None
     skipped_any = False
 
     for spec in specs:
@@ -158,12 +159,19 @@ def execute_steps(cfg: Config, skip: list[str] | None = None) -> dict:
         if res is not None and res.parsed:
             if tests is None or res.passed > tests.passed:
                 tests = res
-            if (not test_step_name or test_step_name == name) and res.coverage is not None:
-                coverage = res.coverage
+            if res.coverage is not None:
+                coverage_any = res.coverage
+                if not test_step_name or test_step_name == name:
+                    coverage = res.coverage
         steps.append(st)
         mark = "通过" if st.ok else "不通过"
         print(f"  [{mark}] {name}  {st.seconds}s" + (f"  {st.note}" if st.note else ""),
               flush=True)
+
+    if coverage is None:
+        coverage = coverage_any
+    if coverage is None:
+        coverage = _coverage_from_disk(cfg)
 
     thr = cfg.get("coverage.threshold")
     if thr is not None:
@@ -171,7 +179,9 @@ def execute_steps(cfg: Config, skip: list[str] | None = None) -> dict:
         cov_step.exit_code = 0
         if coverage is None:
             cov_step.ok = False
-            cov_step.note = "没解析到覆盖率数字"
+            cov_step.note = ("没解析到覆盖率数字：Java 请确认 jacoco:report 写出了 "
+                             "jacoco.xml / jacoco.csv（只有 jacoco.exec 不够）；"
+                             f"coverage.source 现在是「{test_step_name or '空'}」")
         else:
             cov_step.ok = coverage >= float(thr)
             cov_step.note = f"{coverage}%（下限 {thr}%）"
@@ -181,6 +191,25 @@ def execute_steps(cfg: Config, skip: list[str] | None = None) -> dict:
 
     return {"steps": steps, "tests": tests, "coverage": coverage, "threshold": thr,
             "complete": not skipped_any, "seconds": round(time.time() - started, 1)}
+
+
+def _coverage_from_disk(cfg: Config) -> float | None:
+    """测试输出里没带覆盖率时，直接从报告文件读。Java 的数字在 jacoco.xml 里，不在 stdout。"""
+    from .adapters import get
+    ecos = [cfg.get("tests.adapter") or ""] + list(cfg.ecosystems or [])
+    roots = [cfg.root]
+    for s in cfg.get("gate.step") or []:
+        if s.get("kind") == "test":
+            roots.append(cfg.root / (s.get("cwd") or "."))
+    for name in ecos:
+        ad = get(name, cfg.root)
+        fn = getattr(ad, "coverage_from_reports", None)
+        if not callable(fn):
+            continue
+        got = fn(*roots)
+        if got is not None:
+            return got
+    return None
 
 
 def run_gate(cfg: Config, skip: list[str] | None = None) -> int:

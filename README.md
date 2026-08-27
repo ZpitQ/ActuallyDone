@@ -19,7 +19,7 @@ adone health        # 六个维度的项目健康度，汇成一页可离线打�
 所以复核这件事不必由写代码的那个模型来做——见[对抗检查](#对抗检查换一个模型来核)。
 
 零第三方依赖，只用 Python 标准库（需要 3.11+，因为用了 `tomllib`）。
-当前版本 **v1.2.0**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.1**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -205,7 +205,9 @@ python3 bin/adone --version
 ## 升级
 
 `adone upgrade` 是工具级操作：不读 `adone.toml`，当前目录没有配置也能跑。
-它认出你当初怎么装的，再从 GitHub 拉新版本覆盖那一份，不另开一条安装路径。
+它优先覆盖 **PATH 上的 `adone`**（`which adone` 那一份），不是当前这份源码所在的目录。
+从仓库里的 `bin/adone` 跑时如果去 checkout 源码，PATH 上的 pipx 会停在旧版——
+看起来升了，明天敲 `adone` 还是 1.2.0。升完会再跑一次 `adone --version` 核对。
 
 ```bash
 adone upgrade --check          # 只看有没有新版本，不动手

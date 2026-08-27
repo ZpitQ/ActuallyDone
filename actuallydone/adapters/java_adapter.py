@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -59,13 +60,9 @@ REPORT_GLOBS = (
     "**/target/failsafe-reports/*.xml",
     "**/build/test-results/**/*.xml",
 )
-JACOCO_GLOBS = (
-    "**/target/site/jacoco/jacoco.xml",
-    "**/target/site/jacoco-aggregate/jacoco.xml",
-    "**/build/reports/jacoco/test/jacocoTestReport.xml",
-    "**/build/reports/jacoco/jacocoTestReport.xml",
-    "**/build/reports/jacoco/jacoco-aggregate/jacoco.xml",
-)
+JACOCO_NAMES = {"jacoco.xml", "jacocoTestReport.xml", "jacoco.csv"}
+JACOCO_SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__",
+                    ".adone", ".idea", ".next", "dist"}
 ASSERT_WORDS = (
     "assertEquals", "assertTrue", "assertFalse", "assertThat", "assertThrows",
     "assertDoesNotThrow", "assertAll", "assertNull", "assertNotNull",
@@ -207,7 +204,7 @@ class JavaAdapter(Adapter):
                        since: float | None = None) -> TestResult | None:
         console = self._console_counts(text)
         xml = self._xml_cases(cwd, since) if cwd is not None else None
-        coverage = self._jacoco_line_pct(cwd) if cwd is not None else None
+        coverage = self.coverage_from_reports(cwd, self.root) if cwd is not None else None
 
         if console and xml:
             xml_n = (xml["passed"] + xml["failed"] + xml["skipped"],
@@ -403,7 +400,7 @@ class JavaAdapter(Adapter):
         return brace_funcs(lines, start, _func_name)
 
     def zero_cover(self, profile: Path, cwd: Path) -> tuple[int, int] | None:
-        files = self._jacoco_files(cwd)
+        files = [p for p in self._jacoco_files(cwd, self.root) if p.suffix == ".xml"]
         if not files:
             return None
         zero = total = 0
@@ -428,29 +425,89 @@ class JavaAdapter(Adapter):
                         zero += 1
         return (zero, total) if total else None
 
-    def _jacoco_files(self, cwd: Path) -> list[Path]:
+    def _jacoco_files(self, *roots: Path) -> list[Path]:
+        """不限定 target/site/jacoco：团队常把报告写到 jacoco-reports/ 或只开了 CSV。"""
+        seen: set[Path] = set()
         out: list[Path] = []
-        for pat in JACOCO_GLOBS:
-            out.extend(p for p in cwd.glob(pat) if p.is_file())
-        return sorted(set(out))
-
-    def _jacoco_line_pct(self, cwd: Path) -> float | None:
-        covered = missed = 0
-        for p in self._jacoco_files(cwd):
-            try:
-                root = ET.parse(p).getroot()
-            except ET.ParseError:
+        for root in roots:
+            if root is None or not root.is_dir():
                 continue
-            # 只要 report 自己的 LINE counter，不要把 package/class 的再加一遍
-            for c in list(root):
-                if c.tag.rsplit("}", 1)[-1] != "counter":
-                    continue
-                if c.get("type") != "LINE":
-                    continue
-                covered += int(c.get("covered") or 0)
-                missed += int(c.get("missed") or 0)
+            for dirpath, dirnames, filenames in os.walk(root):
+                dirnames[:] = [d for d in dirnames
+                               if d not in JACOCO_SKIP_DIRS and not d.startswith(".")]
+                for fn in filenames:
+                    if fn not in JACOCO_NAMES and not (
+                            fn == "index.html" and "jacoco" in dirpath.lower()):
+                        continue
+                    p = Path(dirpath) / fn
+                    if p not in seen and p.is_file():
+                        seen.add(p)
+                        out.append(p)
+        return sorted(out)
+
+    def coverage_from_reports(self, *roots: Path) -> float | None:
+        files = self._jacoco_files(*roots)
+        xmls = [p for p in files if p.suffix == ".xml"]
+        csvs = [p for p in files if p.suffix == ".csv"]
+        htmls = [p for p in files if p.name == "index.html"]
+        for p in xmls:
+            pct = self._xml_line_pct(p)
+            if pct is not None:
+                return pct
+        for p in csvs:
+            pct = self._csv_line_pct(p)
+            if pct is not None:
+                return pct
+        for p in htmls:
+            pct = self._html_line_pct(p)
+            if pct is not None:
+                return pct
+        return None
+
+    def _xml_line_pct(self, path: Path) -> float | None:
+        try:
+            root = ET.parse(path).getroot()
+        except ET.ParseError:
+            return None
+        covered = missed = 0
+        # 先读 report 自己的 LINE counter；没有再退回各 package 的
+        counters = [c for c in list(root)
+                    if c.tag.rsplit("}", 1)[-1] == "counter" and c.get("type") == "LINE"]
+        if not counters:
+            counters = [c for pkg in root
+                        if pkg.tag.rsplit("}", 1)[-1] == "package"
+                        for c in list(pkg)
+                        if c.tag.rsplit("}", 1)[-1] == "counter" and c.get("type") == "LINE"]
+        for c in counters:
+            covered += int(c.get("covered") or 0)
+            missed += int(c.get("missed") or 0)
         denom = covered + missed
         return round(100.0 * covered / denom, 1) if denom else None
+
+    def _csv_line_pct(self, path: Path) -> float | None:
+        try:
+            with path.open(encoding="utf-8", errors="replace", newline="") as f:
+                rows = list(csv.DictReader(f))
+        except OSError:
+            return None
+        covered = missed = 0
+        for row in rows:
+            try:
+                missed += int(row.get("LINE_MISSED") or 0)
+                covered += int(row.get("LINE_COVERED") or 0)
+            except ValueError:
+                continue
+        denom = covered + missed
+        return round(100.0 * covered / denom, 1) if denom else None
+
+    def _html_line_pct(self, path: Path) -> float | None:
+        try:
+            text = read(path)
+        except OSError:
+            return None
+        m = re.search(r"<tfoot>.*?Total.*?(\d+(?:\.\d+)?)%\s*</td>\s*</tr>",
+                      text, re.S | re.I)
+        return float(m.group(1)) if m else None
 
     def routes(self, target: Path) -> set[str] | None:
         files: list[Path] = []

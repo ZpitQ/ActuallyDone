@@ -119,6 +119,14 @@ class TestStepJudging(ProjectCase):
         gate.judge_step(cfg, {"kind": "test", "adapter": "go"}, st)
         self.assertFalse(st.ok)
 
+    def test_coverage_source对不上时仍能从磁盘报告读覆盖率(self):
+        from tests.helpers import JAVA_JACOCO_XML
+        self.write("reports/jacoco.xml", JAVA_JACOCO_XML)
+        cfg = self.config(project={"ecosystems": ["java"]},
+                          tests={"adapter": "java", "roots": ["."]},
+                          coverage={"threshold": 80.0, "source": "并不存在的步骤"})
+        self.assertEqual(gate._coverage_from_disk(cfg), 85.0)
+
     def test_java适配器能解析mvn_test输出(self):
         cfg = self.config()
         st = gate.Step(name="mvn test", cwd=".", argv=["mvn", "test"])

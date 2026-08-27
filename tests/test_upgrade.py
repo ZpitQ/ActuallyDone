@@ -6,8 +6,8 @@ from pathlib import Path
 
 from actuallydone import __version__
 from actuallydone.cli import build_parser
-from actuallydone.upgrade import (git_blockers, install_argv, install_mode,
-                                  parse_version, repo_root)
+from actuallydone.upgrade import (classify_entry, git_blockers, install_argv,
+                                  install_mode, parse_version, repo_root)
 from tests.helpers import ProjectCase
 
 
@@ -68,6 +68,25 @@ class TestInstallMode(ProjectCase):
 
     def test_repo_root是包的上一级(self):
         self.assertEqual(repo_root().name, "ActuallyDone")
+
+    def test_PATH上的pipx入口优先于当前源码(self):
+        entry = self.root / "adone"
+        entry.write_text(
+            "#!/Users/x/.local/pipx/venvs/actuallydone/bin/python\n"
+            "from actuallydone.cli import main\n",
+            encoding="utf-8")
+        self.assertEqual(classify_entry(entry), "pipx")
+
+    def test_仓库内bin_adone认成git(self):
+        bindir = self.root / "bin"
+        bindir.mkdir()
+        entry = bindir / "adone"
+        (self.root / "actuallydone").mkdir()
+        (self.root / "actuallydone" / "__init__.py").write_text("", encoding="utf-8")
+        (self.root / ".git").mkdir()
+        entry.write_text("#!/usr/bin/env python3\nfrom actuallydone.cli import main\n",
+                         encoding="utf-8")
+        self.assertEqual(classify_entry(entry), "git")
 
 
 class TestGitBlockers(ProjectCase):

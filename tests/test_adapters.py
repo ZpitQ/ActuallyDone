@@ -7,8 +7,8 @@ from actuallydone.adapters.go_adapter import GoAdapter, func_name
 from actuallydone.adapters.java_adapter import JavaAdapter
 from actuallydone.adapters.node_adapter import NodeAdapter
 from actuallydone.adapters.python_adapter import PythonAdapter
-from tests.helpers import (GO_TEST_OUTPUT, GRADLE_TEST_OUTPUT, MAVEN_TEST_OUTPUT,
-                           NODE_TEST_OUTPUT, ProjectCase)
+from tests.helpers import (GO_TEST_OUTPUT, GRADLE_TEST_OUTPUT, JAVA_JACOCO_XML,
+                           MAVEN_TEST_OUTPUT, NODE_TEST_OUTPUT, ProjectCase)
 
 
 class TestGoAdapter(ProjectCase):
@@ -157,6 +157,19 @@ class TestJavaAdapter(ProjectCase):
         self.assertEqual(ad.zero_cover(self.root / "cover.out", self.root), (1, 2))
         res = ad.parse_test_run(MAVEN_TEST_OUTPUT, cwd=self.root, since=0)
         self.assertEqual(res.coverage, 85.0)
+
+    def test_非常规路径的jacoco也能找到(self):
+        self.write("reports/coverage/jacoco.xml", JAVA_JACOCO_XML)
+        ad = JavaAdapter(self.root)
+        self.assertEqual(ad.coverage_from_reports(self.root), 85.0)
+
+    def test_jacoco_csv也能算出行覆盖率(self):
+        self.write("target/site/jacoco/jacoco.csv",
+                   "GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,"
+                   "BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,"
+                   "COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED\n"
+                   "app,com.example,Calc,0,10,0,0,15,85,0,0,0,1\n")
+        self.assertEqual(JavaAdapter(self.root).coverage_from_reports(self.root), 85.0)
 
     def test_Spring类级前缀拼接(self):
         self.write("src/main/java/com/example/Api.java", '''

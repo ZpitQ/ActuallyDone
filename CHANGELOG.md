@@ -2,6 +2,20 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.1 — 2026-08-27
+
+### 修
+
+- **`adone upgrade` 改错对象**：从仓库里的 `bin/adone` 跑时按源码位置判断是 git，
+  去 checkout 这份源码，PATH 上的 pipx 还是 1.2.0。现在优先覆盖 `which adone`
+  指向的那一份，并用它的 `--version` 跟远端比，升完再核一次 PATH。
+- **版本发现取最新**：Release / tag / 默认分支都看，装版本号最高的。
+  以前没有 Release 就停在旧 tag，main 上的补丁装不到。
+- **Java 覆盖率认不到报告**：不再只认 `target/site/jacoco/jacoco.xml`，
+  会扫 `jacoco.xml` / `jacoco.csv` / jacoco 目录下的 `index.html`。
+  `coverage.source` 对不上步骤名时，改从任意测试步骤或磁盘报告回退，
+  不再因为「没解析到数字」让覆盖率门禁形同虚设。
+
 ## v1.3.0 — 2026-08-27
 
 ### Java / JVM 适配器
