@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from actuallydone.adapters import CAP_TESTS, get
 from actuallydone.adapters.go_adapter import GoAdapter, func_name
+from actuallydone.adapters.java_adapter import JavaAdapter
 from actuallydone.adapters.node_adapter import NodeAdapter
 from actuallydone.adapters.python_adapter import PythonAdapter
-from tests.helpers import GO_TEST_OUTPUT, NODE_TEST_OUTPUT, ProjectCase
+from tests.helpers import (GO_TEST_OUTPUT, GRADLE_TEST_OUTPUT, MAVEN_TEST_OUTPUT,
+                           NODE_TEST_OUTPUT, ProjectCase)
 
 
 class TestGoAdapter(ProjectCase):
@@ -84,6 +86,127 @@ class TestPythonAdapter(ProjectCase):
         self.assertEqual(funcs["f"], ["a = 1", "return a"])
 
 
+class TestJavaAdapter(ProjectCase):
+    def test_聚合行不带in才是全局合计(self):
+        res = JavaAdapter(self.root).parse_test_output(MAVEN_TEST_OUTPUT)
+        self.assertEqual((res.passed, res.failed, res.skipped), (1, 1, 1))
+
+    def test_解析Gradle汇总行(self):
+        res = JavaAdapter(self.root).parse_test_output(GRADLE_TEST_OUTPUT)
+        self.assertEqual((res.passed, res.failed, res.skipped), (1, 1, 1))
+
+    def test_逐类行不能被当成全局合计(self):
+        # 只有带 -- in 的行，没有 Results 段：解析不出合计
+        only_class = ("[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0 "
+                      "-- in com.example.CalcTest\n")
+        res = JavaAdapter(self.root).parse_test_output(only_class)
+        self.assertFalse(res.parsed)
+
+    def test_Gradle静默成功时计数取自XML(self):
+        self.make_maven_project()
+        ad = JavaAdapter(self.root)
+        res = ad.parse_test_run("BUILD SUCCESSFUL\n", cwd=self.root, since=0)
+        self.assertTrue(res.parsed)
+        self.assertEqual(res.passed, 2)
+        self.assertEqual(res.skipped, 1)
+        self.assertIn("CalcTest#testAdd", res.passed_names)
+        self.assertIn("CalcTest#加法", res.passed_names)
+
+    def test_XML与控制台对不上时有计数无名字(self):
+        self.make_maven_project()
+        ad = JavaAdapter(self.root)
+        # 控制台说 10 通过，XML 只有 2：对不上
+        res = ad.parse_test_run(
+            "Tests run: 10, Failures: 0, Errors: 0, Skipped: 0\n",
+            cwd=self.root, since=0)
+        self.assertEqual(res.passed, 10)
+        self.assertEqual(res.passed_names, [])
+
+    def test_旧XML不参与解析(self):
+        self.make_maven_project()
+        report = self.root / "target/surefire-reports/TEST-com.example.CalcTest.xml"
+        import os
+        os.utime(report, (1_000_000, 1_000_000))   # 1970 年代
+        res = JavaAdapter(self.root).parse_test_run(
+            "BUILD SUCCESSFUL\n", cwd=self.root, since=1_700_000_000)
+        self.assertFalse(res.parsed)
+
+    def test_源码与XML的名字形式一致且含DisplayName(self):
+        self.make_maven_project()
+        ad = JavaAdapter(self.root)
+        names = ad.test_names([self.root / "src"])
+        self.assertIn("CalcTest#testAdd", names)
+        self.assertIn("CalcTest#testPlus", names)
+        self.assertIn("CalcTest#加法", names)
+        xml = ad.parse_test_run("BUILD SUCCESSFUL\n", cwd=self.root, since=0)
+        for n in xml.passed_names:
+            self.assertIn(n, names)
+
+    def test_andExpect不算无断言_Disabled计入跳过(self):
+        self.make_maven_project()
+        ad = JavaAdapter(self.root)
+        p = self.root / "src/test/java/com/example/CalcTest.java"
+        funcs = {f.name: f for f in ad.iter_test_funcs(p)}
+        self.assertFalse(ad.is_assertionless(funcs["testPlus"].body))
+        self.assertTrue(ad.is_assertionless(funcs["testNoAssert"].body))
+        self.assertGreaterEqual(ad.skip_sites(p.read_text(encoding="utf-8")), 1)
+
+    def test_jacoco零覆盖与行覆盖率(self):
+        self.make_maven_project()
+        ad = JavaAdapter(self.root)
+        self.assertEqual(ad.zero_cover(self.root / "cover.out", self.root), (1, 2))
+        res = ad.parse_test_run(MAVEN_TEST_OUTPUT, cwd=self.root, since=0)
+        self.assertEqual(res.coverage, 85.0)
+
+    def test_Spring类级前缀拼接(self):
+        self.write("src/main/java/com/example/Api.java", '''
+@RequestMapping("/api")
+class Api {
+    @GetMapping("/orders")
+    void list() {}
+    @PostMapping(value = "/orders")
+    void create() {}
+}
+''')
+        got = JavaAdapter(self.root).routes(self.root / "src")
+        self.assertIn("/api/orders", got)
+
+    def test_单跑命令Maven精确与显示名降级(self):
+        self.make_maven_project()
+        ad = JavaAdapter(self.root)
+        self.assertEqual(ad.single_test_argv("CalcTest#testAdd"),
+                         ["mvn", "-B", "-ntp", "test",
+                          "-Dtest=CalcTest#testAdd", "-DfailIfNoTests=false"])
+        argv = ad.single_test_argv("CalcTest#加法")
+        self.assertEqual(argv[-2], "-Dtest=CalcTest")
+
+    def test_单跑命令Gradle(self):
+        self.make_gradle_project()
+        ad = JavaAdapter(self.root)
+        self.assertIn("--tests", ad.single_test_argv("CalcTest#testAdd"))
+        self.assertIn("*.CalcTest.testAdd", ad.single_test_argv("CalcTest#testAdd"))
+        self.assertIn("*.CalcTest", ad.single_test_argv("CalcTest#加法"))
+
+    def test_探测建议步骤含mvn_test且不用fmt(self):
+        self.make_maven_project()
+        steps = JavaAdapter(self.root).suggest_steps(".")
+        names = [s["name"] for s in steps]
+        self.assertIn("mvn test", names)
+        self.assertIn("spotless:check", names)
+        test = next(s for s in steps if s["name"] == "mvn test")
+        self.assertEqual(test["kind"], "test")
+        self.assertEqual(test["adapter"], "java")
+        self.assertIn("jacoco:report", test["argv"])
+        self.assertFalse(any(s.get("kind") == "fmt" for s in steps))
+
+    def test_监视src而不是模块根(self):
+        self.make_maven_project()
+        roots, exts = JavaAdapter(self.root).suggest_watch(".")
+        self.assertEqual(roots, ["src"])
+        self.assertIn(".java", exts)
+        self.assertIn(".kt", exts)
+
+
 class TestRegistry(ProjectCase):
     def test_不认识的生态退回无能力基类而不是抛错(self):
         ad = get("cobol", self.root)
@@ -92,3 +215,4 @@ class TestRegistry(ProjectCase):
 
     def test_能力集合(self):
         self.assertIn(CAP_TESTS, get("go", self.root).caps)
+        self.assertIn(CAP_TESTS, get("java", self.root).caps)

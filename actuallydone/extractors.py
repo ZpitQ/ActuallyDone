@@ -63,10 +63,38 @@ def file_names(path: Path) -> set[str]:
     return {p.name for p in path.rglob("*") if p.is_file()}
 
 
+_TABLE_ANN_RE = re.compile(r'@Table\s*\(\s*(?:name\s*=\s*)?"(\w+)"', re.I)
+_ENTITY_RE = re.compile(r"@Entity\b")
+_ENTITY_CLASS_RE = re.compile(r"\b(?:class|record)\s+(\w+)")
+
+
+def jpa_tables(path: Path) -> set[str]:
+    """从 JPA 实体抽表名：@Table(name="x")，没有 name 时退回实体类名。"""
+    if path.is_dir():
+        out: set[str] = set()
+        for ext in (".java", ".kt"):
+            for p in path.rglob(f"*{ext}"):
+                if p.is_file():
+                    out |= jpa_tables(p)
+        return out
+    if not path.exists():
+        return set()
+    text = read(path)
+    named = set(_TABLE_ANN_RE.findall(text))
+    if named:
+        return named
+    if _ENTITY_RE.search(text):
+        m = _ENTITY_CLASS_RE.search(text)
+        if m:
+            return {m.group(1)}
+    return set()
+
+
 EXTRACTORS: dict[str, Callable[[Path], set[str]]] = {
     "sql_tables": sql_tables,
     "openapi_paths": openapi_paths,
     "file_names": file_names,
+    "jpa_tables": jpa_tables,
 }
 
 

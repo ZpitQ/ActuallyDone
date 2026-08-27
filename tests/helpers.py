@@ -62,6 +62,85 @@ NODE_TEST_OUTPUT = """ \u2713 src/order.test.ts > \u62d2\u7edd\u8d1f\u6570\u4ef7
  Tests  1 failed | 2 passed (3)
 """
 
+MAVEN_TEST_OUTPUT = """
+[INFO] Running com.example.CalcTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 1 -- in com.example.CalcTest
+[INFO] Running com.example.OtherTest
+[INFO] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0 -- in com.example.OtherTest
+[INFO]
+[INFO] Results:
+[INFO]
+[INFO] Tests run: 3, Failures: 1, Errors: 0, Skipped: 1
+"""
+
+GRADLE_TEST_OUTPUT = """
+3 tests completed, 1 failed, 1 skipped
+
+BUILD SUCCESSFUL in 1s
+"""
+
+JAVA_CALC_TEST = '''package com.example;
+
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+class CalcTest {
+    @Test
+    void testAdd() {
+        assertEquals(3, Calc.add(1, 2));
+    }
+
+    @Test
+    @DisplayName("加法")
+    void testPlus() {
+        mockMvc.perform(get("/x")).andExpect(status().isOk());
+    }
+
+    @Disabled
+    @Test
+    void testSkip() {
+        assertEquals(1, 1);
+    }
+
+    @Test
+    void testNoAssert() {
+        Calc.add(1, 2);
+    }
+}
+'''
+
+JAVA_SUREFIRE_XML = '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.CalcTest" tests="3" failures="0" errors="0" skipped="1" time="0.1">
+  <testcase name="testAdd()" classname="com.example.CalcTest" time="0.01"/>
+  <testcase name="加法" classname="com.example.CalcTest" time="0.01"/>
+  <testcase name="testSkip()" classname="com.example.CalcTest" time="0.0">
+    <skipped/>
+  </testcase>
+</testsuite>
+'''
+
+JAVA_JACOCO_XML = '''<?xml version="1.0" encoding="UTF-8"?>
+<report name="fixture">
+  <package name="com/example">
+    <class name="com/example/Calc" sourcefilename="Calc.java">
+      <method name="add" desc="(II)I" line="3">
+        <counter type="METHOD" missed="0" covered="1"/>
+      </method>
+      <method name="unused" desc="()V" line="7">
+        <counter type="METHOD" missed="1" covered="0"/>
+      </method>
+      <method name="&lt;init&gt;" desc="()V" line="1">
+        <counter type="METHOD" missed="0" covered="1"/>
+      </method>
+    </class>
+  </package>
+  <counter type="INSTRUCTION" missed="10" covered="90"/>
+  <counter type="LINE" missed="15" covered="85"/>
+  <counter type="METHOD" missed="1" covered="1"/>
+</report>
+'''
+
 
 class ProjectCase(unittest.TestCase):
     """每个用例一个临时项目，测完即删。"""
@@ -88,6 +167,40 @@ class ProjectCase(unittest.TestCase):
         self.write("src/order.test.ts",
                    'it("拒绝负数价格", () => { expect(1).toBe(1) })\n')
         self.write("src/OrderView.vue", "<template><div/></template>\n")
+
+    def make_maven_project(self) -> None:
+        self.write("pom.xml", """<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>fixture</artifactId>
+  <version>1.0</version>
+  <build><plugins>
+    <plugin><artifactId>jacoco-maven-plugin</artifactId></plugin>
+    <plugin><groupId>com.diffplug.spotless</groupId><artifactId>spotless-maven-plugin</artifactId></plugin>
+  </plugins></build>
+</project>
+""")
+        self.write("src/main/java/com/example/Calc.java",
+                   "package com.example;\npublic class Calc {\n"
+                   "    public static int add(int a, int b) { return a + b; }\n"
+                   "    public static int unused() { return 0; }\n}\n")
+        self.write("src/test/java/com/example/CalcTest.java", JAVA_CALC_TEST)
+        self.write("target/surefire-reports/TEST-com.example.CalcTest.xml",
+                   JAVA_SUREFIRE_XML)
+        self.write("target/site/jacoco/jacoco.xml", JAVA_JACOCO_XML)
+
+    def make_gradle_project(self) -> None:
+        self.write("build.gradle", """plugins { id 'java'; id 'jacoco' }
+repositories { mavenCentral() }
+dependencies { testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0' }
+test { useJUnitPlatform() }
+""")
+        self.write("src/main/java/com/example/Calc.java",
+                   "package com.example;\npublic class Calc {\n"
+                   "    public static int add(int a, int b) { return a + b; }\n}\n")
+        self.write("src/test/java/com/example/CalcTest.java", JAVA_CALC_TEST)
+        self.write("build/test-results/test/TEST-com.example.CalcTest.xml",
+                   JAVA_SUREFIRE_XML)
 
     def config(self, **over) -> Config:
         data = {

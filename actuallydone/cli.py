@@ -101,6 +101,11 @@ def cmd_install(args) -> int:
     return run(_cfg(args), args)
 
 
+def cmd_upgrade(args) -> int:
+    from .upgrade import cmd_upgrade as run
+    return run(args)
+
+
 # --------------------------------------------------------------------------- 装配
 
 def build_parser() -> argparse.ArgumentParser:
@@ -119,7 +124,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("detect", help="重新探测项目结构（默认只打印，不改配置）")
-    p.add_argument("--write", action="store_true", help="把探测结果写回 adone.toml")
+    p.add_argument("--write", action="store_true", help="整份覆盖写入 adone.toml（已有配置会丢）")
+    p.add_argument("--merge", action="store_true",
+                   help="增量合并进已有 adone.toml：追加新步骤、补数组键，不碰阈值")
+    p.add_argument("--dry-run", action="store_true", help="和 --merge 一起：只打印摘要，不落盘")
+    p.add_argument("--adopt-tests", action="store_true",
+                   help="和 --merge 一起：把 tests.adapter / coverage.source 改成探测结果")
     p.add_argument("--root", help="项目根")
     p.set_defaults(func=cmd_detect)
 
@@ -214,6 +224,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="覆盖已存在的技能文件")
     p.add_argument("--dry-run", action="store_true", help="只说要做什么，不落盘")
     p.set_defaults(func=cmd_install)
+
+    p = sub.add_parser("upgrade", help="从 GitHub 拉最新版并覆盖当前安装")
+    p.add_argument("--check", action="store_true",
+                   help="只报告有没有新版本：0=已最新 / 1=有新版 / 2=查不到")
+    p.add_argument("--ref", metavar="tag|branch",
+                   help="装指定的 tag 或分支，而不是最新")
+    p.add_argument("--force", action="store_true",
+                   help="允许降级，或在脏的 git 工作树上强制更新")
+    p.add_argument("--dry-run", action="store_true", help="只说要做什么，不执行")
+    p.set_defaults(func=cmd_upgrade)
 
     return ap
 

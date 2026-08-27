@@ -59,6 +59,15 @@ class Adapter:
     def parse_test_output(self, text: str) -> TestResult | None:
         return None
 
+    def parse_test_run(self, text: str, *, cwd: Path | None = None,
+                       since: float | None = None) -> TestResult | None:
+        """带运行上下文的解析。默认忽略 cwd / since，退回 parse_test_output。
+
+        只有要从磁盘读报告（JUnit XML 等）的生态才覆盖它：
+        cwd 是步骤的工作目录，since 是这一轮开始的墙上时钟，用来丢掉上一轮残留的报告。
+        """
+        return self.parse_test_output(text)
+
     def test_names(self, roots: list[Path]) -> set[str] | None:
         return None
 

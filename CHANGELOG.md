@@ -2,6 +2,34 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.0 — 2026-08-27
+
+### Java / JVM 适配器
+
+接入的 Java 团队配了 `kind = "test"` 的 `mvn test`，适配器却退回无能力基类，
+解析不出 Surefire 输出，门禁把「全部通过」判成「解析不出」。这一版补上。
+
+- **内置 `java` 适配器**：认 `pom.xml` / `build.gradle[.kts]`，Maven 与 Gradle
+  （`./mvnw` / `./gradlew` 优先），JUnit 4/5 与 TestNG。用例名规范形式是
+  `CalcTest#testAdd`，带 `@DisplayName` 时两种写法都能对上契约与抽查。
+- **JUnit XML + 新鲜度**：控制台只有汇总数，逐条名字从 surefire / failsafe /
+  Gradle `test-results` 的 XML 读。用步骤开始时间丢掉上一轮残留报告；
+  XML 合计与控制台对不上时只给计数、不给名字——抽查标未评估，不标通过。
+- **JaCoCo、Spring 路由、JPA 表名**：覆盖率从 `jacoco.xml` 读；
+  `@GetMapping` 等与类级 `@RequestMapping` 前缀拼接；抽取器新增 `jpa_tables`。
+- **`adone detect --merge`**：给已经配好的项目增量追加步骤和 `watch_*`，
+  不冲掉 `coverage.threshold`。`--write` 仍是整份覆盖。改 `tests.adapter`
+  必须显式 `--adopt-tests`，否则假绿基线与判据锁会对不上。
+- **`adone upgrade`**：从 GitHub 拉最新版，识别 pipx / pip / git 三种装法并覆盖。
+  没有 Release 时回退到 tag、再回退到默认分支。远端更旧拒绝降级。
+  在本仓库的脏工作树上跑会被拦住。
+
+### 修
+
+- `coverage.source` 指向 `kind=test` 的步骤，不再误取第一步（Java 第一步可能是 spotless）。
+- `adone doctor` 按步骤 cwd 解析 `./mvnw` / `./gradlew`，不再谎报「不在 PATH 里」。
+- 适配器协议新增 `parse_test_run(text, *, cwd, since)`，Go / Node / Python 行为不变。
+
 ## v1.2.0 — 2026-08-14
 
 ### 审计结论也能出一页离线 HTML

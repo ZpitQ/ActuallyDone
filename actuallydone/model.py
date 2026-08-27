@@ -88,9 +88,10 @@ class Step:
     note: str = ""
     output_tail: str = ""
     stdout: str = field(default="", repr=False)
+    started_at: float = field(default=0.0, repr=False)
 
     def as_receipt(self) -> dict:
-        return {k: v for k, v in vars(self).items() if k != "stdout"}
+        return {k: v for k, v in vars(self).items() if k not in ("stdout", "started_at")}
 
 
 @dataclass

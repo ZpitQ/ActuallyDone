@@ -119,6 +119,17 @@ class TestStepJudging(ProjectCase):
         gate.judge_step(cfg, {"kind": "test", "adapter": "go"}, st)
         self.assertFalse(st.ok)
 
+    def test_java适配器能解析mvn_test输出(self):
+        cfg = self.config()
+        st = gate.Step(name="mvn test", cwd=".", argv=["mvn", "test"])
+        st.exit_code, st.ok, st.stdout = 0, True, (
+            "Tests run: 2, Failures: 0, Errors: 0, Skipped: 0\n")
+        st.started_at = 0
+        res = gate.judge_step(cfg, {"kind": "test", "adapter": "java"}, st)
+        self.assertTrue(st.ok)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.passed, 2)
+
 
 class TestContracts(ProjectCase):
     def receipt(self, names) -> dict:

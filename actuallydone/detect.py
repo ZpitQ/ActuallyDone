@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -87,7 +88,8 @@ def detect(root: Path) -> Detected:
         got.hooks_file = ".cursor/hooks.json"
 
     if not got.ecosystems:
-        got.notes.append("一个生态都没认出来（找不到 go.mod / package.json / pyproject.toml）："
+        got.notes.append("一个生态都没认出来（找不到 go.mod / package.json / "
+                         "pyproject.toml / pom.xml / build.gradle）："
                          "门禁步骤要手工填")
     return got
 
@@ -153,8 +155,10 @@ def render_config(got: Detected) -> str:
     a("[coverage]")
     a("# 先跑一次 adone gate run 看实际覆盖率，再把下限填成「当前水位」并注明这是水位不是许愿。")
     a("# threshold = 0.0")
-    a(f"source = {q(got.steps[0]['name'] if got.steps else '')}"
-      "   # 从哪一步的输出里读覆盖率")
+    cov_src = next((s["name"] for s in got.steps if s.get("kind") == "test"), "")
+    if not cov_src and got.steps:
+        cov_src = got.steps[0]["name"]
+    a(f"source = {q(cov_src)}   # 从哪一步的输出里读覆盖率")
     a("")
     a("[tests]")
     a(f"adapter = {q(got.tests_adapter)}    # 请确认：探测所得")
@@ -218,10 +222,198 @@ def render_config(got: Detected) -> str:
     return "\n".join(L) + "\n"
 
 
+def _is_rel_cmd(cmd: str) -> bool:
+    """./mvnw 这种相对路径不能拿 shutil.which 查，要按步骤 cwd 解析。"""
+    return cmd.startswith(".") or "/" in cmd or "\\" in cmd
+
+
+def _render_step(s: dict) -> str:
+    L = [
+        "[[gate.step]]",
+        f"name = {q(s['name'])}",
+        f"cwd = {q(s.get('cwd', '.'))}",
+        f"argv = {arr(s['argv'])}",
+    ]
+    if s.get("kind"):
+        L.append(f"kind = {q(s['kind'])}")
+    if s.get("adapter"):
+        L.append(f"adapter = {q(s['adapter'])}")
+    if s.get("kind") == "test":
+        L.append("# 输出里出现这些串就判本轮证据无效（例如整批用例因为连不上数据库被跳过）")
+        L.append("invalid_marks = []")
+    return "\n".join(L) + "\n"
+
+
+def _section_span(text: str, section: str) -> tuple[int, int] | None:
+    m = re.search(rf"^\[{re.escape(section)}]\s*$", text, re.M)
+    if not m:
+        return None
+    nxt = re.search(r"^\[", text[m.end():], re.M)
+    end = m.end() + nxt.start() if nxt else len(text)
+    return m.start(), end
+
+
+def _patch_array_key(text: str, section: str, key: str,
+                     add: list[str]) -> tuple[str, str | None, list[str]]:
+    """就地改 [section] 里单行 key = [...] 。折成多行的不猜，报成待办。
+
+    返回 (新文本, 待办或 None, 实际新增的值)。
+    """
+    span = _section_span(text, section)
+    if span is None:
+        return text, f"[{section}] 段不存在，没法补 {key}", []
+    start, end = span
+    block = text[start:end]
+    m = re.search(rf"^({re.escape(key)}\s*=\s*)\[(.*)\](.*)$", block, re.M)
+    if not m:
+        if re.search(rf"^{re.escape(key)}\s*=", block, re.M):
+            return text, f"[{section}].{key} 不是单行数组，请手工补 {add}", []
+        # 段在，键不在：插到段末
+        insert = f"{key} = {arr(add)}\n"
+        return text[:end] + insert + text[end:], None, list(add)
+    try:
+        existing = json.loads("[" + m.group(2) + "]")
+    except json.JSONDecodeError:
+        return text, f"[{section}].{key} 解析失败，请手工补 {add}", []
+    if not isinstance(existing, list):
+        return text, f"[{section}].{key} 不是数组，请手工补 {add}", []
+    new, added = list(existing), []
+    for item in add:
+        if item not in new:
+            new.append(item)
+            added.append(item)
+    if not added:
+        return text, None, []
+    patched = block[:m.start()] + f"{m.group(1)}{arr(new)}{m.group(3)}" + block[m.end():]
+    return text[:start] + patched + text[end:], None, added
+
+
+def merge_config(existing: str, got: Detected, adopt_tests: bool = False
+                 ) -> tuple[str, list[str]]:
+    """把探测到的新生态增量写进已有 adone.toml。不碰阈值，除非 --adopt-tests。"""
+    from .config import Config
+    cfg = Config.from_dict(got.root, {})
+    try:
+        raw = __import__("tomllib").loads(existing)
+        cfg = Config.from_dict(got.root, raw)
+    except Exception as e:
+        return existing, [f"现有 adone.toml 解析失败，拒绝合并：{e}"]
+
+    notes: list[str] = []
+    text = existing if existing.endswith("\n") else existing + "\n"
+    have_steps = cfg.get("gate.step", []) or []
+    have_keys = {(s.get("name"), tuple(s.get("argv") or [])) for s in have_steps}
+    appended: list[str] = []
+    for s in got.steps:
+        key = (s.get("name"), tuple(s.get("argv") or []))
+        if key in have_keys:
+            continue
+        text = text.rstrip() + "\n\n" + _render_step(s)
+        appended.append(s["name"])
+        have_keys.add(key)
+    if appended:
+        notes.append(f"追加门禁步骤：{'、'.join(appended)}")
+    else:
+        notes.append("门禁步骤没有新增（已有步骤的 name+argv 对得上）")
+
+    for section, key, values in (
+        ("project", "ecosystems", list(got.ecosystems)),
+        ("gate", "watch_roots", got.watch_roots),
+        ("gate", "watch_exts", got.watch_exts),
+    ):
+        text, issue, added = _patch_array_key(text, section, key, values)
+        if issue:
+            notes.append(f"待办：{issue}")
+        elif added:
+            notes.append(f"[{section}].{key} 补了 {added}")
+
+    if adopt_tests and got.tests_adapter:
+        # 只在显式要求时改测试适配器，否则 integrity / policy 会立刻报放松
+        text, issue, _ = _patch_scalar(text, "tests", "adapter", got.tests_adapter)
+        if issue:
+            notes.append(f"待办：{issue}")
+        else:
+            notes.append(f"tests.adapter 改成 {got.tests_adapter}（--adopt-tests）")
+        if got.tests_roots:
+            text, issue, added = _patch_array_key(text, "tests", "roots", got.tests_roots)
+            if issue:
+                notes.append(f"待办：{issue}")
+            elif added:
+                notes.append(f"[tests].roots 补了 {added}")
+        test_step = next((s["name"] for s in got.steps if s.get("kind") == "test"), "")
+        if test_step:
+            text, issue, _ = _patch_scalar(text, "coverage", "source", test_step)
+            if issue:
+                notes.append(f"待办：{issue}")
+            else:
+                notes.append(f"coverage.source 改成 {test_step}（--adopt-tests）")
+    else:
+        cur_ad = cfg.get("tests.adapter") or ""
+        new_ecos = [e for e in got.ecosystems if e not in set(cfg.ecosystems)]
+        if got.tests_adapter and got.tests_adapter != cur_ad:
+            notes.append(f"建议：探测到测试适配器 {got.tests_adapter}，"
+                         f"要改 tests.adapter 请加 --adopt-tests "
+                         f"（会让假绿基线与判据锁对不上，随后要重新记账）")
+        elif new_ecos:
+            notes.append(f"建议：新探测到 {'、'.join(new_ecos)}，"
+                         f"要改 tests.adapter 请加 --adopt-tests "
+                         f"（会让假绿基线与判据锁对不上，随后要重新记账）")
+
+    return text if text.endswith("\n") else text + "\n", notes
+
+
+def _patch_scalar(text: str, section: str, key: str,
+                  value: str) -> tuple[str, str | None, bool]:
+    span = _section_span(text, section)
+    if span is None:
+        return text, f"[{section}] 段不存在，没法改 {key}", False
+    start, end = span
+    block = text[start:end]
+    m = re.search(rf"^({re.escape(key)}\s*=\s*)(.*)$", block, re.M)
+    if not m:
+        insert = f"{key} = {q(value)}\n"
+        return text[:end] + insert + text[end:], None, True
+    if "\n" in m.group(2).strip():
+        return text, f"[{section}].{key} 不是单行，请手工改成 {value}", False
+    patched = block[:m.start()] + f"{m.group(1)}{q(value)}" + block[m.end():]
+    return text[:start] + patched + text[end:], None, True
+
+
+def _merge_followup(got: Detected, adopt_tests: bool) -> list[str]:
+    lines = [
+        "合并之后按这个顺序走：",
+        "  1. 核对新增的 [[gate.step]]（命令、cwd、adapter）",
+        "  2. adone doctor",
+        "  3. adone gate run   # 拿实测覆盖率回填 coverage.threshold",
+    ]
+    if adopt_tests and got.tests_adapter:
+        lines.append(f'  4. adone integrity --accept-baseline "切到 {got.tests_adapter} 适配器"')
+        lines.append('  5. adone policy --accept "接入 java 门禁步骤"')
+        lines.append("  6. 已装钩子的话：adone install --hooks-only --force")
+    else:
+        lines.append('  4. adone policy --accept "接入新的门禁步骤"')
+        lines.append("  5. 已装钩子的话：adone install --hooks-only --force")
+    return lines
+
+
 # --------------------------------------------------------------------------- 命令
 
 def cmd_detect(args) -> int:
     root = Path(args.root).resolve() if args.root else Path.cwd()
+    merge = getattr(args, "merge", False)
+    write = getattr(args, "write", False)
+    dry = getattr(args, "dry_run", False)
+    adopt = getattr(args, "adopt_tests", False)
+    if merge and write:
+        print("--merge 与 --write 互斥：--write 整份覆盖，--merge 只增量追加", file=sys.stderr)
+        return 2
+    if adopt and not merge:
+        print("--adopt-tests 只能和 --merge 一起用", file=sys.stderr)
+        return 2
+    if dry and not merge:
+        print("--dry-run 只能和 --merge 一起用", file=sys.stderr)
+        return 2
+
     got = detect(root)
     print(f"探测 {root}：")
     print(f"  生态：{'、'.join(f'{k}（{v}）' for k, v in got.ecosystems.items()) or '未识别'}")
@@ -231,12 +423,41 @@ def cmd_detect(args) -> int:
     print(f"  文档：{'、'.join(got.docs) or '无'}")
     for n in got.notes:
         print(f"  · {n}")
-    if args.write:
+
+    if merge:
+        return _cmd_merge(root, got, dry=dry, adopt=adopt)
+    if write:
         path = root / CONFIG_NAME
         path.write_text(render_config(got), encoding="utf-8")
         print(f"\n已写入 {path}（带「请确认」标记，请逐条核对）")
-    else:
-        print("\n（只是探测，没有写配置；要写加 --write）")
+        return 0
+    print("\n（只是探测，没有写配置；要写加 --write，已有配置要增量加 --merge）")
+    return 0
+
+
+def _cmd_merge(root: Path, got: Detected, *, dry: bool, adopt: bool) -> int:
+    path = root / CONFIG_NAME
+    if not path.is_file():
+        print(f"{path} 不存在，没有可合并的配置。新项目请用 adone init 或 adone detect --write",
+              file=sys.stderr)
+        return 2
+    old = path.read_text(encoding="utf-8")
+    new, notes = merge_config(old, got, adopt_tests=adopt)
+    print("\n合并摘要：")
+    for n in notes:
+        print(f"  · {n}")
+    if old == new:
+        print("配置没有变化。")
+        return 0
+    if dry:
+        print("\n（演练，没有落盘）")
+        return 0
+    bak = path.with_suffix(path.suffix + ".bak")
+    bak.write_text(old, encoding="utf-8")
+    path.write_text(new, encoding="utf-8")
+    print(f"\n已写入 {path}（备份 {bak.name}）")
+    for line in _merge_followup(got, adopt):
+        print(line)
     return 0
 
 
@@ -278,10 +499,19 @@ def cmd_doctor(cfg: Config, args) -> int:
 
     # 命令能不能跑得动：路径配对了但工具没装，跑门禁时才发现太晚
     import shutil
+    from pathlib import Path as P
     for s in cfg.get("gate.step", []) or []:
         argv = s.get("argv") or []
-        if argv and not shutil.which(argv[0]):
-            problems.append(f"gate.step「{s.get('name')}」的命令 {argv[0]} 不在 PATH 里")
+        if not argv:
+            continue
+        cmd = argv[0]
+        cwd = cfg.root / (s.get("cwd") or ".")
+        if _is_rel_cmd(cmd):
+            if not (cwd / cmd).exists() and not P(cmd).exists():
+                problems.append(f"gate.step「{s.get('name')}」的命令 {cmd} 在 "
+                                f"{s.get('cwd') or '.'} 下找不到")
+        elif not shutil.which(cmd):
+            problems.append(f"gate.step「{s.get('name')}」的命令 {cmd} 不在 PATH 里")
 
     from .adapters import REGISTRY as R
     eco = cfg.ecosystems

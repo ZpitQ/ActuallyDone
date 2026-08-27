@@ -98,6 +98,14 @@ class TestMaterialsDimension(ProjectCase):
         res = dim_materials.run(Ctx(cfg=cfg))
         self.assertTrue(any("ghost" in f.message for f in res.findings))
 
+    def test_jpa实体表名能和DDL对账(self):
+        self.write("code.sql", "CREATE TABLE orders (id int);")
+        self.write("Order.java", '@Entity\n@Table(name = "ghost")\nclass Order {}\n')
+        cfg = self.config(docs={"excerpt": [{"file": "Order.java", "extract": "jpa_tables",
+                                             "against": "code.sql"}]})
+        res = dim_materials.run(Ctx(cfg=cfg))
+        self.assertTrue(any("ghost" in f.message for f in res.findings))
+
     def test_文档写死的数字与现实对账(self):
         self.write("code.sql", "CREATE TABLE a (id int);\nCREATE TABLE b (id int);")
         self.write("doc.md", "本文覆盖 5 张表。")
@@ -140,6 +148,15 @@ class TestDetectAndInstall(ProjectCase):
         got = detect.detect(self.root)
         self.assertIn("node", got.ecosystems)
         self.assertIn("前端构建", [s["name"] for s in got.steps])
+
+    def test_探测java项目且覆盖率来源指向测试步骤(self):
+        self.make_maven_project()
+        got = detect.detect(self.root)
+        self.assertEqual(got.ecosystems.get("java"), ".")
+        self.assertIn("mvn test", [s["name"] for s in got.steps])
+        text = detect.render_config(got)
+        self.assertIn('source = "mvn test"', text)
+        self.assertNotIn('source = "spotless:check"', text)
 
     def test_生成的配置能被解析且不猜阈值(self):
         self.make_go_project()

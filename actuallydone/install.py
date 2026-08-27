@@ -54,6 +54,15 @@ DIALECT = {
         "FMT_CMD": "ruff check . 通过",
         "BUILD_CMD": "python -m compileall -q . 通过",
     },
+    "java": {
+        "ASSERT_API": "assertEquals / assertThat / andExpect",
+        "SKIP_API": "@Disabled / assumeTrue",
+        "TEST_FUNC_FORM": "用例名（`CalcTest#testAdd`）",
+        "TEST_NAME_EXAMPLE": "CalcTest#testAdd",
+        "IMPL_EXAMPLE": "<实现文件>.java:168",
+        "FMT_CMD": "mvn -B spotless:check 通过",
+        "BUILD_CMD": "mvn -B -ntp test 通过",
+    },
 }
 FALLBACK = {
     "ASSERT_API": "断言函数",

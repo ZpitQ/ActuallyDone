@@ -12,11 +12,13 @@ from pathlib import Path
 from .base import (CAP_COVERAGE, CAP_FUNCS, CAP_ROUTES, CAP_SINGLE_TEST,
                    CAP_TABLES, CAP_TESTS, CAP_VIEWS, Adapter)
 from .go_adapter import GoAdapter
+from .java_adapter import JavaAdapter
 from .node_adapter import NodeAdapter
 from .python_adapter import PythonAdapter
 
 REGISTRY: dict[str, type[Adapter]] = {
     "go": GoAdapter,
+    "java": JavaAdapter,
     "node": NodeAdapter,
     "python": PythonAdapter,
     "generic": Adapter,

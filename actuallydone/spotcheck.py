@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import random
 import subprocess
+import time
 
 from .config import Config
 
@@ -62,6 +63,7 @@ def spot_check(cfg: Config, receipt: dict, n: int) -> tuple[list[str], list[str]
     for name, argv in argvs:
         if argv is None:
             continue
+        t0 = time.time()
         try:
             proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
                                   timeout=TIMEOUT)
@@ -69,7 +71,7 @@ def spot_check(cfg: Config, receipt: dict, n: int) -> tuple[list[str], list[str]
             problems.append(f"抽查用例 {name} 跑不起来（{' '.join(argv)}）：{e}")
             continue
         out = proc.stdout + proc.stderr
-        res = ad.parse_test_output(out)
+        res = ad.parse_test_run(out, cwd=cwd, since=t0)
         top = name.split("/")[0]
         # 退出码 0 还不够：-run 打错字会「一条没跑」也返回 0，那不是通过，是没跑
         hit = bool(res and res.parsed and top in {p.split("/")[0] for p in res.passed_names})

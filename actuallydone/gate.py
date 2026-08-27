@@ -69,6 +69,7 @@ def run_step(cfg: Config, spec: dict) -> Step:
             for a in spec["argv"]]
     st = Step(name=spec.get("name") or argv[0], cwd=spec.get("cwd", "."), argv=argv)
     t0 = time.time()
+    st.started_at = t0
     try:
         proc = subprocess.run(argv, cwd=cfg.root / st.cwd, capture_output=True, text=True)
     except FileNotFoundError as e:
@@ -103,7 +104,8 @@ def judge_step(cfg: Config, spec: dict, st: Step) -> TestResult | None:
 
     from .adapters import get
     ad = get(spec.get("adapter") or "", cfg.root)
-    res = ad.parse_test_output(st.stdout)
+    res = ad.parse_test_run(st.stdout, cwd=cfg.root / st.cwd,
+                            since=st.started_at or None)
     if res is None or not res.parsed:
         st.ok = False
         st.note = ("解析不出测试结果——要么适配器不认这种输出格式，"

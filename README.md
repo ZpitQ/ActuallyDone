@@ -196,6 +196,14 @@ pip install git+https://github.com/iamharvey/ActuallyDone.git
 python3 bin/adone --version
 ```
 
+已经装过的，用 `adone upgrade` 从 GitHub 拉最新版并覆盖当前安装
+（自动识别 pipx / pip / vendor 的 git 工作树）。`--check` 只报告有没有新版本。
+在本工具自己的开发仓库里跑会被拦住：脏工作树或未推送提交都拒绝，除非 `--force`。
+
+已有配置、新接入一门生态时，不要用 `adone detect --write`（整份覆盖会冲掉阈值），
+用 `adone detect --merge`：追加新的 `[[gate.step]]`、补 `ecosystems` / `watch_*`，
+不改 `tests.adapter` 除非显式加 `--adopt-tests`。
+
 ## 快速上手
 
 ```bash
@@ -438,6 +446,11 @@ class RustAdapter(Adapter):
 
     def parse_test_output(self, text):
         ...   # 返回 TestResult；解析不出就返回 TestResult(parsed=False)
+
+    def parse_test_run(self, text, *, cwd=None, since=None):
+        ...   # 可选。要从磁盘读报告（JUnit XML 等）时覆盖它：
+              # cwd 是步骤工作目录，since 是这一轮开始的墙上时钟，用来丢掉上一轮残留的报告。
+              # 默认退回 parse_test_output。
 ```
 
 注册到 `actuallydone/adapters/__init__.py` 的 `REGISTRY` 即可。
@@ -503,9 +516,14 @@ python3 -m unittest        # 标准库，不引 pytest
   本机就发生过钩子被 anaconda 的 3.10 起起来、`import tomllib` 直接失败的事。
   `bin/adone` 因此会在解释器过老时自动找一个 3.11+ 的换过去（PATH 找不到就去
   `/opt/homebrew/bin` 等常见位置翻），实在找不到会明说，而不是丢一段堆栈。
-- 内置适配器只有 go / node / python / generic 四个。generic 适配器只能跑步骤，
+- 内置适配器是 go / java / node / python / generic。generic 适配器只能跑步骤，
   列不出用例名，因此假绿检测、验收契约与 `--spotcheck` 在纯 generic 项目里会显示未评估。
-  单条重跑目前只有 go（`-run '^Name$'`）与 python（pytest 用例 ID / unittest `-k`）支持。
+  单条重跑：go（`-run '^Name$'`）、python（pytest 用例 ID / unittest `-k`）、
+  java（Maven `-Dtest=Class#method` / Gradle `--tests`；`@DisplayName` 中文名会降级跑整个类）。
+- Java 适配器的已知边界：参数化用例的多次调用归并到同一个 `Class#method`；
+  `--spotcheck` 遇到显示名只能降级跑整类；`zero_cover` 读 JaCoCo 报告，拿不到新鲜度，
+  只出警告不阻断门禁。Kotlin / Groovy 做到源码级（切函数、断言、跳过、用例名），
+  路由提取仍以 Java 注解为主。
 - **对抗检查是「同机不同会话」，工具不验证复核者的身份。** `.adone/audit.json` 里的
   `role: auditor` 是自述——换一个模型、不给它实现过程，这两件事得由你在流程上保证，
   工具只保证复核者拿得到独立判据、且它的结论不会覆盖被审的证据。
