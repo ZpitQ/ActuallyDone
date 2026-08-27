@@ -252,6 +252,19 @@ class TestStepJudging(ProjectCase):
                           coverage={"threshold": 80.0, "source": "并不存在的步骤"})
         self.assertEqual(gate._coverage_from_disk(cfg), 85.0)
 
+    def test_读不到覆盖率时点名断在哪一环(self):
+        """「没解析到覆盖率数字」本身没有信息量：没装插件、没跑 report、探针没挂上、
+        测试整批被跳过，处理办法完全不同。"""
+        self.write("pom.xml", "<project/>")
+        cfg = self.config(project={"ecosystems": ["java"]},
+                          tests={"adapter": "java", "roots": ["."]},
+                          coverage={"threshold": 80.0, "source": "mvn test"})
+        st = gate.Step(name="mvn test", cwd=".", argv=["mvn", "test"])
+        st.stdout = ("[INFO] Skipping JaCoCo execution due to missing execution "
+                     "data file.\n[INFO] BUILD SUCCESS\n")
+        note = gate._coverage_missing_note(cfg, [st], "mvn test")
+        self.assertIn("prepare-agent", note)
+
     def test_java适配器能解析mvn_test输出(self):
         cfg = self.config()
         st = gate.Step(name="mvn test", cwd=".", argv=["mvn", "test"])

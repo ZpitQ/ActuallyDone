@@ -34,7 +34,13 @@ FALLBACK_DIRS = (
     "~/.local/pipx/venvs/actuallydone/bin",
     "/opt/homebrew/bin",
     "/usr/local/bin",
+    # Windows：venv 的脚本目录叫 Scripts，pipx 默认装到 ~/.local/bin 但也可能在这
+    "~/.local/pipx/venvs/actuallydone/Scripts",
+    "~/AppData/Roaming/Python/Scripts",
+    "~/AppData/Local/Programs/Python/Scripts",
 )
+# Windows 上装出来的是 adone.exe，按裸名去 os.access 一个都对不上
+EXE_NAMES = ("adone", "adone.exe", "adone.cmd", "adone.bat")
 
 
 def log(root: str, msg: str) -> None:
@@ -58,15 +64,16 @@ def resolve_adone(root: str) -> list[str] | None:
         # 解释器在运行时才定：把安装时的 sys.executable 烧进来，换台机器就跑不动了。
         # 入口自己会在解释器太老时换一个够新的
         return [sys.executable, entry]
-    if ADONE_CMD and os.access(ADONE_CMD, os.X_OK):
+    if ADONE_CMD and os.path.isfile(ADONE_CMD):
         return [ADONE_CMD]
-    on_path = shutil.which("adone")
+    on_path = shutil.which("adone")   # which 会按 PATHEXT 补出 .exe / .cmd
     if on_path:
         return [on_path]
     for d in FALLBACK_DIRS:
-        cand = os.path.join(os.path.expanduser(d), "adone")
-        if os.access(cand, os.X_OK):
-            return [cand]
+        for name in EXE_NAMES:
+            cand = os.path.join(os.path.expanduser(d), name)
+            if os.path.isfile(cand):
+                return [cand]
     return None
 
 

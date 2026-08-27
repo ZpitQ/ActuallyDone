@@ -247,9 +247,7 @@ def execute_steps(cfg: Config, skip: list[str] | None = None) -> dict:
         cov_step.exit_code = 0
         if coverage is None:
             cov_step.ok = False
-            cov_step.note = ("没解析到覆盖率数字：Java 请确认 jacoco:report 写出了 "
-                             "jacoco.xml / jacoco.csv（只有 jacoco.exec 不够）；"
-                             f"coverage.source 现在是「{test_step_name or '空'}」")
+            cov_step.note = _coverage_missing_note(cfg, steps, test_step_name)
         else:
             cov_step.ok = coverage >= float(thr)
             cov_step.note = f"{coverage}%（下限 {thr}%）"
@@ -261,16 +259,25 @@ def execute_steps(cfg: Config, skip: list[str] | None = None) -> dict:
             "complete": not skipped_any, "seconds": round(time.time() - started, 1)}
 
 
-def _coverage_from_disk(cfg: Config) -> float | None:
-    """测试输出里没带覆盖率时，直接从报告文件读。Java 的数字在 jacoco.xml 里，不在 stdout。"""
-    from .adapters import get
-    ecos = [cfg.get("tests.adapter") or ""] + list(cfg.ecosystems or [])
+def _cov_roots(cfg: Config) -> list[Path]:
+    """找覆盖率报告的起点：仓库根，加上每个测试步骤的目录（多模块仓库报告在子模块下）。"""
     roots = [cfg.root]
     for s in cfg.get("gate.step") or []:
         if s.get("kind") == "test":
             roots.append(cfg.root / (s.get("cwd") or "."))
-    for name in ecos:
-        ad = get(name, cfg.root)
+    return roots
+
+
+def _cov_adapters(cfg: Config):
+    from .adapters import get
+    for name in [cfg.get("tests.adapter") or "", *(cfg.ecosystems or [])]:
+        yield get(name, cfg.root)
+
+
+def _coverage_from_disk(cfg: Config) -> float | None:
+    """测试输出里没带覆盖率时，直接从报告文件读。Java 的数字在 jacoco.xml 里，不在 stdout。"""
+    roots = _cov_roots(cfg)
+    for ad in _cov_adapters(cfg):
         fn = getattr(ad, "coverage_from_reports", None)
         if not callable(fn):
             continue
@@ -278,6 +285,25 @@ def _coverage_from_disk(cfg: Config) -> float | None:
         if got is not None:
             return got
     return None
+
+
+def _coverage_missing_note(cfg: Config, steps: list[Step], source: str) -> str:
+    """没读到覆盖率时，让适配器指出断在哪一环。
+
+    「没解析到覆盖率数字」这句话本身没有信息量：它可能是没装插件、没跑 report、
+    探针没挂上、或者测试整批被跳过，处理办法完全不同。
+    """
+    output = "\n".join(s.stdout for s in steps if s.stdout)
+    roots = _cov_roots(cfg)
+    for ad in _cov_adapters(cfg):
+        fn = getattr(ad, "coverage_diagnosis", None)
+        if not callable(fn):
+            continue
+        said = fn(*roots, output=output)
+        if said:
+            return f"没解析到覆盖率数字。{said}"
+    return (f"没解析到覆盖率数字：coverage.source 现在是「{source or '空'}」，"
+            f"确认那一步的输出里有覆盖率，或报告文件写到了磁盘上")
 
 
 def run_gate(cfg: Config, skip: list[str] | None = None) -> int:

@@ -61,6 +61,8 @@ REPORT_GLOBS = (
     "**/build/test-results/**/*.xml",
 )
 JACOCO_NAMES = {"jacoco.xml", "jacocoTestReport.xml", "jacoco.csv"}
+# jacoco:report 采不到数据时打的原话。命令照样 BUILD SUCCESS，所以只能认这句
+JACOCO_NO_DATA = "Skipping JaCoCo execution due to missing execution data file"
 JACOCO_SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__",
                     ".adone", ".idea", ".next", "dist"}
 ASSERT_WORDS = (
@@ -169,9 +171,14 @@ class JavaAdapter(Adapter):
             if "spotless" in low or "checkstyle" in low:
                 steps.append({"name": "spotless:check", "cwd": hint_dir,
                               "argv": [*self._mvn_cmd(base), "spotless:check"]})
-            argv = [*self._mvn_cmd(base), "test"]
+            argv = [*self._mvn_cmd(base)]
             if "jacoco" in low:
-                argv.append("jacoco:report")
+                # prepare-agent 必须在 test 前面，而且要显式写在 CLI 上：
+                # pom 只声明了插件却没绑 prepare-agent 时，mvn test 不挂探针，
+                # jacoco:report 只打一行 Skipping 就 BUILD SUCCESS，一份报告都没有
+                argv += ["jacoco:prepare-agent", "test", "jacoco:report"]
+            else:
+                argv.append("test")
             steps.append({"name": "mvn test", "cwd": hint_dir, "kind": "test",
                           "adapter": "java", "argv": argv})
             return steps
@@ -455,28 +462,44 @@ class JavaAdapter(Adapter):
         return sorted(out)
 
     def coverage_from_reports(self, *roots: Path) -> float | None:
+        """多模块项目要把各模块的行数加起来。
+
+        以前是「返回第一份能解析出数字的报告」，那在 aics-api + aics-gateway 这种
+        多模块仓库里报的是字母序第一个模块的覆盖率，既不是整体水位，
+        也会随模块改名而跳变。
+        """
         files = self._jacoco_files(*roots)
         xmls = [p for p in files if p.suffix == ".xml"]
-        csvs = [p for p in files if p.suffix == ".csv"]
-        htmls = [p for p in files if p.name == "index.html"]
-        for p in xmls:
-            pct = self._xml_line_pct(p)
-            if pct is not None:
-                return pct
-        for p in csvs:
-            pct = self._csv_line_pct(p)
-            if pct is not None:
-                return pct
-        for p in htmls:
+        # 有聚合报告就只认它：再把各模块报告加进来就是重复计数
+        agg = [p for p in xmls if "aggregate" in p.as_posix().lower()]
+        for group in (agg or xmls, [p for p in files if p.suffix == ".csv"]):
+            covered = missed = 0
+            for p in group:
+                got = (self._xml_line_counts(p) if p.suffix == ".xml"
+                       else self._csv_line_counts(p))
+                if got:
+                    covered += got[0]
+                    missed += got[1]
+            if covered + missed:
+                return round(100.0 * covered / (covered + missed), 1)
+        # HTML 只有百分比，加不起来，只能取第一份
+        for p in [p for p in files if p.name == "index.html"]:
             pct = self._html_line_pct(p)
             if pct is not None:
                 return pct
         return None
 
     def _xml_line_pct(self, path: Path) -> float | None:
+        got = self._xml_line_counts(path)
+        if not got or not sum(got):
+            return None
+        return round(100.0 * got[0] / sum(got), 1)
+
+    def _xml_line_counts(self, path: Path) -> tuple[int, int] | None:
+        """返回（覆盖行数，未覆盖行数）。解析不了或没有 LINE 计数返回 None。"""
         try:
             root = ET.parse(path).getroot()
-        except ET.ParseError:
+        except (ET.ParseError, OSError):
             return None
         covered = missed = 0
         # 先读 report 自己的 LINE counter；没有再退回各 package 的
@@ -490,10 +513,15 @@ class JavaAdapter(Adapter):
         for c in counters:
             covered += int(c.get("covered") or 0)
             missed += int(c.get("missed") or 0)
-        denom = covered + missed
-        return round(100.0 * covered / denom, 1) if denom else None
+        return (covered, missed) if covered + missed else None
 
     def _csv_line_pct(self, path: Path) -> float | None:
+        got = self._csv_line_counts(path)
+        if not got or not sum(got):
+            return None
+        return round(100.0 * got[0] / sum(got), 1)
+
+    def _csv_line_counts(self, path: Path) -> tuple[int, int] | None:
         try:
             with path.open(encoding="utf-8", errors="replace", newline="") as f:
                 rows = list(csv.DictReader(f))
@@ -506,8 +534,52 @@ class JavaAdapter(Adapter):
                 covered += int(row.get("LINE_COVERED") or 0)
             except ValueError:
                 continue
-        denom = covered + missed
-        return round(100.0 * covered / denom, 1) if denom else None
+        return (covered, missed) if covered + missed else None
+
+    def coverage_diagnosis(self, *roots: Path, output: str = "") -> str:
+        """没读到覆盖率时，说清是哪一环断了，而不是让人对着「没解析到数字」猜。
+
+        最常断的一环是 prepare-agent 没绑进构建生命周期：`mvn test jacoco:report`
+        会打一行 Skipping 然后 BUILD SUCCESS，一份报告都不写——命令成功了，
+        覆盖率却无从谈起，这是 Java 团队最容易撞上的假绿。
+        """
+        if JACOCO_NO_DATA in output:
+            return ("JaCoCo 没采集到数据（输出里有「Skipping JaCoCo execution due to "
+                    "missing execution data file」）。pom 没把 prepare-agent 绑进构建"
+                    "生命周期，`mvn test` 时探针就没挂上，报告自然是空的。"
+                    "把步骤 argv 改成 mvn -B -ntp jacoco:prepare-agent test jacoco:report"
+                    "（CLI 显式跑 prepare-agent，不依赖 pom 的绑定）")
+        reports = self._jacoco_files(*roots)
+        if reports:
+            return (f"找到 {len(reports)} 份 jacoco 报告（{self._show(reports[0])} 等）"
+                    f"但一行都没统计到：报告里的 LINE 计数是空的，"
+                    f"确认测试真的执行到了被测类，而不是整批被跳过")
+        execs = self._exec_files(*roots)
+        if execs:
+            return (f"有 {self._show(execs[0])} 但没有 jacoco.xml / jacoco.csv："
+                    f"探针采到了数据，是 jacoco:report 没跑或没配 XML 输出。"
+                    f"在测试步骤末尾加上 jacoco:report")
+        return ("一份 jacoco 报告都没找到（按 jacoco.xml / jacocoTestReport.xml / "
+                "jacoco.csv 从步骤目录和仓库根递归扫的）。确认 pom 里启用了 "
+                "jacoco-maven-plugin，且步骤是 "
+                "mvn -B -ntp jacoco:prepare-agent test jacoco:report")
+
+    def _exec_files(self, *roots: Path) -> list[Path]:
+        out: list[Path] = []
+        for root in roots:
+            if root is None or not root.is_dir():
+                continue
+            for dirpath, dirnames, filenames in os.walk(root):
+                dirnames[:] = [d for d in dirnames
+                               if d not in JACOCO_SKIP_DIRS and not d.startswith(".")]
+                out += [Path(dirpath) / fn for fn in filenames if fn.endswith(".exec")]
+        return sorted(set(out))
+
+    def _show(self, p: Path) -> str:
+        try:
+            return p.relative_to(self.root).as_posix()
+        except ValueError:
+            return p.name
 
     def _html_line_pct(self, path: Path) -> float | None:
         try:

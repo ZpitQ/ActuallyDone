@@ -122,6 +122,8 @@ def variables(cfg: Config) -> dict[str, str]:
         "GATE_STEPS": "、".join(steps) or "见 adone.toml 的 gate.step",
         "WATCH_ROOTS": " ".join(f'"{r}"' for r in roots),
         "WATCH_EXTS": " ".join(f'"{e}"' for e in exts),
+        "WATCH_ROOTS_PY": json.dumps(roots, ensure_ascii=False),
+        "WATCH_EXTS_PY": json.dumps(exts, ensure_ascii=False),
         # 没设阈值就别替人编一个数字
         "COVERAGE_CLAIM": f"、覆盖率不低于 {thr}%" if thr is not None else "",
         "COVERAGE_DESC": (f"下限 {thr}%，由 adone.toml 的 coverage.threshold 定"
@@ -252,15 +254,23 @@ def hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
         lines.append("  钩子：未安装（要装跑 adone install --with-hooks）")
         return lines, problems
 
-    registered = json.dumps(_read_json(hooks_json).get("hooks") or {}, ensure_ascii=False)
+    events = _read_json(hooks_json).get("hooks") or {}
+    registered = json.dumps(events, ensure_ascii=False)
     for name, path in scripts.items():
         if not path.exists():
             problems.append(f"钩子 {name} 不在 .cursor/hooks/ 里，重跑 adone install --hooks-only --force")
             continue
-        if not os.access(path, os.X_OK):
-            problems.append(f"钩子 {name} 没有可执行位，Cursor 起不动它（chmod +x 或重装钩子）")
         if name not in registered:
             problems.append(f"{name} 在磁盘上，但 .cursor/hooks.json 里没登记它，等于没装")
+
+    for name in LEGACY_SCRIPTS:
+        if name in registered:
+            problems.append(f"hooks.json 里还登记着旧版 {name}（bash 版，Windows 上没有 "
+                            f"bash 也没有 jq，Cursor 起不动它）："
+                            f"重渲一下 adone install --hooks-only --force")
+
+    for cmd in _our_commands(events):
+        problems += _launch_problems(cfg, cmd)
 
     guard = scripts["gate-guard.py"]
     if guard.exists():
@@ -270,7 +280,7 @@ def hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
         found = _resolve_adone(cfg.root, entry, cmd)
         if found:
             lines.append(f"  钩子：已装，跑门禁时用 {found}")
-            if cmd and not os.access(cmd, os.X_OK) and not entry:
+            if cmd and not Path(cmd).is_file() and not entry:
                 problems.append(f"钩子里记的 {cmd} 已经失效，现在靠运行时兜底找到 {found}；"
                                 f"重渲一下（adone install --hooks-only --force）免得兜底也扑空")
         else:
@@ -284,6 +294,47 @@ def hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
     return lines, problems
 
 
+def _our_commands(events: dict) -> list[str]:
+    names = (*OUR_SCRIPTS, *LEGACY_SCRIPTS)
+    return [str(h.get("command") or "")
+            for hooks in (events or {}).values() for h in (hooks or [])
+            if any(n in str(h.get("command") or "") for n in names)]
+
+
+def _launch_problems(cfg: Config, cmd: str) -> list[str]:
+    """这条登记在本机到底起不起得来。
+
+    以前这里只查可执行位（`os.access(X_OK)`）——那在 Windows 上对任何存在的文件
+    都为真，于是「钩子已装」和「钩子从没被触发过」在体检里长得一模一样，
+    Java 团队就是这么被坑的：Agent 改完代码没人提醒，doctor 却说钩子已装。
+    """
+    from .gate import resolve_cmd
+    parts = cmd.split()
+    if parts and parts[0] == "cmd":
+        parts = parts[2:] if len(parts) > 2 and parts[1].lower() in ("/c", "/k") else parts[1:]
+    if not parts:
+        return []
+
+    if len(parts) == 1:
+        # 只有脚本路径：靠 shebang 加可执行位启动，这是 POSIX 才成立的约定
+        if os.name == "nt":
+            return [f"钩子命令「{cmd}」在 Windows 上起不动：shebang 与可执行位是 POSIX "
+                    f"才有的东西。重渲一下 adone install --hooks-only --force"]
+        p = cfg.root / parts[0]
+        if p.exists() and not os.access(p, os.X_OK):
+            return [f"钩子 {parts[0]} 没有可执行位，Cursor 起不动它（chmod +x 或重装钩子）"]
+        return []
+
+    out: list[str] = []
+    if resolve_cmd(parts[0], cfg.root) is None:
+        out.append(f"钩子命令「{cmd}」里的 {parts[0]} 找不到：Cursor 起不动它，"
+                   f"钩子会静默失效（装上它，或重渲 adone install --hooks-only --force）")
+    script = next((p for p in parts if p.endswith((".py", ".sh"))), "")
+    if script and not (cfg.root / script).is_file():
+        out.append(f"钩子命令「{cmd}」指向的 {script} 不存在")
+    return out
+
+
 def _const(text: str, name: str) -> str:
     m = re.search(rf'^{name}\s*=\s*"([^"]*)"', text, re.M)
     return m.group(1) if m else ""
@@ -293,25 +344,64 @@ def _resolve_adone(root: Path, entry: str, cmd: str) -> str:
     """复刻钩子运行时的查找顺序。钩子是生成物，不能 import 这里的代码，只能对齐。"""
     if entry and (root / entry).is_file():
         return str(root / entry)
-    if cmd and os.access(cmd, os.X_OK):
+    if cmd and Path(cmd).is_file():
         return cmd
     on_path = shutil.which("adone")
     if on_path:
         return on_path
     for d in ("~/.local/bin", "~/.local/pipx/venvs/actuallydone/bin",
-              "/opt/homebrew/bin", "/usr/local/bin"):
-        cand = Path(d).expanduser() / "adone"
-        if os.access(cand, os.X_OK):
-            return str(cand)
+              "/opt/homebrew/bin", "/usr/local/bin",
+              "~/.local/pipx/venvs/actuallydone/Scripts",
+              "~/AppData/Roaming/Python/Scripts",
+              "~/AppData/Local/Programs/Python/Scripts"):
+        for name in ("adone", "adone.exe", "adone.cmd", "adone.bat"):
+            cand = Path(d).expanduser() / name
+            if cand.is_file():
+                return str(cand)
     return ""
 
 
-OUR_SCRIPTS = ("mark-dirty.sh", "gate-guard.py")
-OUR_HOOKS = {
-    "afterFileEdit": [{"command": ".cursor/hooks/mark-dirty.sh", "timeout": 10}],
-    "stop": [{"command": ".cursor/hooks/gate-guard.py", "timeout": 120,
-              "loop_limit": 3, "failClosed": False}],
-}
+OUR_SCRIPTS = ("mark-dirty.py", "gate-guard.py")
+# 早先 afterFileEdit 挂的是 bash 版：Windows 上没有 bash 也没有 jq，Cursor 起不动它。
+# 升级时要把它从 hooks.json 里摘掉，否则留着一条永远失败的登记
+LEGACY_SCRIPTS = ("mark-dirty.sh",)
+
+
+def hook_python() -> str:
+    """钩子里用哪个解释器。
+
+    不烧 sys.executable：hooks.json 是要提交进仓库的，
+    /opt/homebrew/opt/python@3.13/bin/python3.13 换台机器就是错的。
+    """
+    if os.name == "nt":
+        # py 是官方安装器带的启动器；Windows 商店那个 python 别名会打开应用商店
+        return "py -3" if shutil.which("py") else "python"
+    return "python3"
+
+
+def hook_command(script: str) -> str:
+    """注册显式解释器调用，而不是脚本路径本身。
+
+    shebang 与可执行位是 POSIX 才有的东西。以前直接注册 `.cursor/hooks/gate-guard.py`，
+    Windows 上 Cursor 起不动，钩子静默不触发——Agent 改完代码没人提醒，
+    而这正是本工具要防的「检查失效长得像检查通过」。
+    官方文档的 Python 示例（`python3 .cursor/hooks/kube_guard.py`）就是显式解释器。
+    """
+    if os.name == "nt":
+        # Cursor 是否用 shell 起钩子没有文档保证，套一层 cmd /c 两种情况都能跑
+        return f"cmd /c {hook_python()} {script}"
+    return f"{hook_python()} {script}"
+
+
+def our_hooks() -> dict:
+    """本机该写进 hooks.json 的登记。命令随平台变，所以是函数而不是常量。"""
+    return {
+        "afterFileEdit": [
+            {"command": hook_command(".cursor/hooks/mark-dirty.py"), "timeout": 10}],
+        "stop": [
+            {"command": hook_command(".cursor/hooks/gate-guard.py"), "timeout": 120,
+             "loop_limit": 3, "failClosed": False}],
+    }
 
 
 def _read_json(path: Path) -> dict:
@@ -331,14 +421,16 @@ def merge_hooks(existing: dict) -> tuple[dict, int]:
     out = dict(existing) if existing else {}
     out["version"] = out.get("version", 1)
     events = dict(out.get("hooks") or {})
+    ours_all = our_hooks()
+    mine = (*OUR_SCRIPTS, *LEGACY_SCRIPTS)
     kept = 0
-    for event, ours in OUR_HOOKS.items():
+    for event, ours in ours_all.items():
         foreign = [h for h in (events.get(event) or [])
-                   if not any(s in str(h.get("command", "")) for s in OUR_SCRIPTS)]
+                   if not any(s in str(h.get("command", "")) for s in mine)]
         kept += len(foreign)
         events[event] = foreign + [dict(h) for h in ours]
     for event, hooks in (out.get("hooks") or {}).items():
-        if event not in OUR_HOOKS:
+        if event not in ours_all:
             kept += len(hooks or [])
     out["hooks"] = events
     return out, kept
@@ -347,7 +439,7 @@ def merge_hooks(existing: dict) -> tuple[dict, int]:
 def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
     hooks_dir = cfg.root / ".cursor" / "hooks"
     written = 0
-    for name in ("mark-dirty.sh", "gate-guard.py"):
+    for name in OUR_SCRIPTS:
         src = TEMPLATES / "hooks" / name
         dst = hooks_dir / name
         if dst.exists() and not args.force:
@@ -358,15 +450,26 @@ def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
             print(f"  [演练] 将写入 {dst.relative_to(cfg.root)}")
         else:
             _write(dst, content)
-            dst.chmod(0o755)   # 没有可执行位的钩子会静默失效
+            dst.chmod(0o755)   # POSIX 上直接跑脚本时用得上；Windows 上靠显式解释器
             print(f"  写入 {dst.relative_to(cfg.root)}")
         written += 1
+
+    # 旧版 bash 钩子留在磁盘上只会让 doctor 反复报问题，它已经不被登记了
+    for name in LEGACY_SCRIPTS:
+        stale = hooks_dir / name
+        if not stale.is_file():
+            continue
+        if args.dry_run:
+            print(f"  [演练] 将删掉旧版 {stale.relative_to(cfg.root)}")
+        else:
+            stale.unlink(missing_ok=True)
+            print(f"  删掉旧版 {stale.relative_to(cfg.root)}（已换成 Python 版）")
 
     cfg_path = cfg.root / ".cursor" / "hooks.json"
     if cfg_path.exists() and not args.force:
         print(f"  跳过已存在的 {cfg_path.relative_to(cfg.root)}（要覆盖加 --force，"
               f"会保留你自己写在里面的其他钩子）；需要的配置是：\n"
-              f"{json.dumps(OUR_HOOKS, ensure_ascii=False, indent=2)}")
+              f"{json.dumps(our_hooks(), ensure_ascii=False, indent=2)}")
         return written
 
     merged, kept = merge_hooks(_read_json(cfg_path))

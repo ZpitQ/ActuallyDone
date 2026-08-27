@@ -122,24 +122,25 @@ def _args(**over) -> Namespace:
 
 
 class TestMarkDirty(ProjectCase):
-    """afterFileEdit 钩子：它记不下东西时，dirty 为空和「仓库没被改过」长得一样。"""
+    """afterFileEdit 钩子：它记不下东西时，dirty 为空和「仓库没被改过」长得一样。
+
+    这个钩子早先是 bash + jq，在 Windows 上根本起不来。现在是 Python，
+    起进程时也只用 sys.executable，不再假设机器上有 bash。
+    """
 
     def render(self, **cfg_over) -> Path:
         cfg = self.config(**cfg_over)
-        src = install.TEMPLATES / "hooks" / "mark-dirty.sh"
-        hook = self.root / "hooks" / "mark-dirty.sh"
+        src = install.TEMPLATES / "hooks" / "mark-dirty.py"
+        hook = self.root / "hooks" / "mark-dirty.py"
         hook.parent.mkdir(parents=True, exist_ok=True)
         hook.write_text(install.render(src.read_text(encoding="utf-8"),
                                        install.variables(cfg)), encoding="utf-8")
-        hook.chmod(0o755)
         return hook
 
-    def fire(self, hook: Path, rel: str, path: str | None = None) -> None:
+    def fire(self, hook: Path, file_path: str) -> None:
         env = dict(os.environ, CURSOR_PROJECT_DIR=str(self.root))
-        if path is not None:
-            env["PATH"] = path
-        payload = json.dumps({"file_path": str(self.root / rel)})
-        proc = subprocess.run(["/bin/bash", str(hook)], input=payload,
+        proc = subprocess.run([sys.executable, str(hook)],
+                              input=json.dumps({"file_path": file_path}),
                               capture_output=True, text=True, env=env, cwd=self.root)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip(), "{}")   # 钩子不该把会话卡死
@@ -153,37 +154,48 @@ class TestMarkDirty(ProjectCase):
         而按 "./*" 匹配时一个文件都对不上，dirty 于是永远为空。"""
         self.make_go_project()
         hook = self.render(gate={"watch_roots": ["."], "watch_exts": [".go"]})
-        self.fire(hook, "internal/calc.go")
+        self.fire(hook, str(self.root / "internal/calc.go"))
         self.assertIn("internal/calc.go", self.dirty())
 
-    def test_没有jq时用python3兜底(self):
-        """PATH 里只放 python3——带上 /usr/bin 的话本机的 jq 会让这条用例假绿。"""
+    def test_受监视根是子目录时按前缀匹配(self):
         self.make_go_project()
-        hook = self.render()
-        (self.root / ".adone").mkdir()
-        bindir = self.root / "onlypython"
-        bindir.mkdir()
-        (bindir / "python3").symlink_to(sys.executable)
-        self.fire(hook, "internal/calc.go", path=str(bindir))
+        self.write("other/x.go", "package other\n")
+        hook = self.render(gate={"watch_roots": ["internal"], "watch_exts": [".go"]})
+        self.fire(hook, str(self.root / "internal/calc.go"))
+        self.fire(hook, str(self.root / "other/x.go"))
         self.assertIn("internal/calc.go", self.dirty())
+        self.assertNotIn("other/x.go", self.dirty())
 
-    def test_jq和python3都没有时留痕而不是静默(self):
+    def test_不在受监视后缀里的文件不记(self):
         self.make_go_project()
-        hook = self.render()
-        (self.root / ".adone").mkdir()   # 真实项目里 init/gate 早把它建好了
-        self.fire(hook, "internal/calc.go", path=str(self.root / "空目录"))
+        self.write("internal/readme.md", "随便写点什么")
+        hook = self.render(gate={"watch_roots": ["."], "watch_exts": [".go"]})
+        self.fire(hook, str(self.root / "internal/readme.md"))
         self.assertEqual(self.dirty(), "")
-        log = (self.root / ".adone" / "hook.log").read_text(encoding="utf-8")
-        self.assertIn("解析不了 payload", log)
+
+    def test_Windows风格的反斜杠路径也能对上(self):
+        """Cursor 在 Windows 上给的 file_path 是反斜杠，而受监视根写的是正斜杠。"""
+        self.make_go_project()
+        hook = self.render(gate={"watch_roots": ["internal"], "watch_exts": [".go"]})
+        self.fire(hook, str(self.root / "internal" / "calc.go").replace("/", os.sep))
+        self.assertIn("internal/calc.go", self.dirty())
 
     def test_仓库外的文件不算(self):
         self.make_go_project()
         hook = self.render(gate={"watch_roots": ["."], "watch_exts": [".go"]})
-        env = dict(os.environ, CURSOR_PROJECT_DIR=str(self.root))
-        subprocess.run(["/bin/bash", str(hook)], text=True, env=env, cwd=self.root,
-                       input=json.dumps({"file_path": "/etc/somewhere/else.go"}),
-                       capture_output=True)
+        self.fire(hook, "/etc/somewhere/else.go")
         self.assertEqual(self.dirty(), "")
+
+    def test_payload坏了也要留痕而不是静默(self):
+        self.make_go_project()
+        hook = self.render()
+        env = dict(os.environ, CURSOR_PROJECT_DIR=str(self.root))
+        proc = subprocess.run([sys.executable, str(hook)], input="不是 JSON",
+                              capture_output=True, text=True, env=env, cwd=self.root)
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(self.dirty(), "")
+        log = (self.root / ".adone" / "hook.log").read_text(encoding="utf-8")
+        self.assertIn("读不动 payload", log)
 
 
 class TestHooksJson(ProjectCase):
@@ -197,13 +209,32 @@ class TestHooksJson(ProjectCase):
         self.assertEqual(kept, 2)
         self.assertEqual(merged["hooks"]["beforeShellExecution"], [{"command": "./my-guard.sh"}])
         cmds = [h["command"] for h in merged["hooks"]["stop"]]
-        self.assertEqual(cmds, ["./my-stop.sh", ".cursor/hooks/gate-guard.py"])
+        self.assertEqual(cmds[0], "./my-stop.sh")
+        self.assertIn(".cursor/hooks/gate-guard.py", cmds[1])
 
     def test_重装不会把自己的条目叠成两份(self):
         once, _ = install.merge_hooks({})
         twice, kept = install.merge_hooks(once)
         self.assertEqual(twice, once)
         self.assertEqual(kept, 0)
+
+    def test_注册的是显式解释器调用而不是裸脚本路径(self):
+        """靠 shebang 加可执行位启动是 POSIX 才成立的约定：Windows 上 Cursor
+        起不动 .py，钩子静默不触发，Agent 改完代码没人提醒。"""
+        merged, _ = install.merge_hooks({})
+        for event in ("afterFileEdit", "stop"):
+            cmd = merged["hooks"][event][0]["command"]
+            self.assertNotEqual(cmd.split()[0][-3:], ".py", cmd)
+            self.assertIn(".cursor/hooks/", cmd)
+
+    def test_旧版bash钩子会被摘掉(self):
+        old = {"version": 1, "hooks": {
+            "afterFileEdit": [{"command": ".cursor/hooks/mark-dirty.sh", "timeout": 10}]}}
+        merged, kept = install.merge_hooks(old)
+        self.assertEqual(kept, 0)
+        blob = json.dumps(merged, ensure_ascii=False)
+        self.assertNotIn("mark-dirty.sh", blob)
+        self.assertIn("mark-dirty.py", blob)
 
 
 class TestInstallFailsLoud(ProjectCase):
@@ -254,12 +285,34 @@ class TestDoctorChecksHooks(ProjectCase):
             os.environ["PATH"] = old
         self.assertTrue(any("找不到 adone" in p for p in problems), problems)
 
-    def test_丢了可执行位要报出来(self):
+    def test_钩子命令里的解释器找不到时报出来(self):
+        """钩子起不来的样子就是「什么都不发生」，doctor 是唯一有机会说话的地方。
+        以前这里只查可执行位，而 os.access(X_OK) 在 Windows 上恒为真。"""
         self.make_go_project()
         cfg = self.install_hooks()
-        (self.root / ".cursor" / "hooks" / "mark-dirty.sh").chmod(0o644)
+        hooks_json = self.root / ".cursor" / "hooks.json"
+        data = json.loads(hooks_json.read_text(encoding="utf-8"))
+        data["hooks"]["stop"][0]["command"] = "绝不存在的解释器 .cursor/hooks/gate-guard.py"
+        hooks_json.write_text(json.dumps(data), encoding="utf-8")
         _, problems = install.hooks_report(cfg)
-        self.assertTrue(any("可执行位" in p for p in problems), problems)
+        self.assertTrue(any("绝不存在的解释器" in p for p in problems), problems)
+
+    def test_登记的脚本不存在时报出来(self):
+        self.make_go_project()
+        cfg = self.install_hooks()
+        (self.root / ".cursor" / "hooks" / "mark-dirty.py").unlink()
+        _, problems = install.hooks_report(cfg)
+        self.assertTrue(any("mark-dirty.py" in p for p in problems), problems)
+
+    def test_还登记着旧版bash钩子要报出来(self):
+        self.make_go_project()
+        cfg = self.install_hooks()
+        hooks_json = self.root / ".cursor" / "hooks.json"
+        data = json.loads(hooks_json.read_text(encoding="utf-8"))
+        data["hooks"]["afterFileEdit"] = [{"command": ".cursor/hooks/mark-dirty.sh"}]
+        hooks_json.write_text(json.dumps(data), encoding="utf-8")
+        _, problems = install.hooks_report(cfg)
+        self.assertTrue(any("旧版 mark-dirty.sh" in p for p in problems), problems)
 
     def test_配置改了钩子没重渲要报出来(self):
         self.make_go_project()

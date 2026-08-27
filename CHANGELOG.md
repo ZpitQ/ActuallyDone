@@ -2,6 +2,44 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.3 — 2026-08-27
+
+Java 团队在 Windows 上反馈的两件事。它们是同一类病，和 v1.3.2 修的 `mvn` 一样：
+**体检用的判断和操作系统实际执行的判断不一致**，于是「检查失效」长得像「检查通过」。
+
+### 修
+
+- **Windows 上钩子静默不触发，Agent 改完代码没人提醒**：`afterFileEdit` 挂的是
+  `mark-dirty.sh`（bash + jq），`stop` 挂的是靠 shebang 加可执行位启动的
+  `gate-guard.py`——这三样在 Windows 上都不成立，Cursor 起不动，钩子什么都不做。
+  而 `doctor` 查的是 `os.access(X_OK)`，那在 Windows 上对任何存在的文件恒为真，
+  所以体检还报「钩子：已装」。现在：
+  - `mark-dirty` 从 bash 移植成 Python（`mark-dirty.py`），去掉 bash 与 jq 依赖，
+    顺带认 Windows 给的反斜杠 `file_path`；旧的 `.sh` 会被摘掉登记并删除。
+  - `hooks.json` 里注册**显式解释器调用**（Windows 上是 `cmd /c py -3 …`），
+    不再依赖 shebang 与可执行位。这也是官方文档 Python 示例的写法。
+  - `doctor` 改为真的去解析登记命令里的解释器，起不来就报出来；
+    还登记着旧版 `.sh` 时点名要求重渲。
+  - `gate-guard` 在 Windows 上能找到 `adone.exe` / `adone.cmd`，
+    并会翻 `Scripts` 这类 Windows 专有的脚本目录。
+- **`mvn test jacoco:report` 成功了却读不到覆盖率**：pom 只声明了插件、没把
+  `prepare-agent` 绑进生命周期时，`mvn test` 不挂探针，`jacoco:report` 打一行
+  `Skipping JaCoCo execution due to missing execution data file` 就 BUILD SUCCESS，
+  一份报告都不写。现在 `adone init` 生成的步骤是
+  `mvn -B -ntp jacoco:prepare-agent test jacoco:report`（CLI 显式跑，不依赖 pom 绑定）；
+  读不到覆盖率时会指出断在哪一环——探针没挂上 / 只有 `.exec` 没有 xml /
+  一份报告都没找到 / 报告里行计数为空——而不是只说「没解析到覆盖率数字」。
+- **多模块覆盖率报的是第一个模块**：以前返回「第一份能解析出数字的报告」，
+  在 aics-api + aics-gateway 这种仓库里既不是整体水位，还会随模块改名而跳变。
+  改成把各模块的行数加起来；有 `jacoco-aggregate` 聚合报告时只认聚合报告，
+  免得重复计数。
+
+### 文档
+
+- README 新增「Windows」与「Java 的覆盖率读不到」两节。
+- 限制声明写清：Windows 的支持是「按 Windows 语义实现并有针对性用例」，
+  不是「在 Windows CI 上跑过」——仓库里没有 Windows runner。
+
 ## v1.3.2 — 2026-08-27
 
 ### 修

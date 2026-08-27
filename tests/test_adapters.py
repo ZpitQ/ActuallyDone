@@ -163,6 +163,49 @@ class TestJavaAdapter(ProjectCase):
         ad = JavaAdapter(self.root)
         self.assertEqual(ad.coverage_from_reports(self.root), 85.0)
 
+    def test_多模块的覆盖率是各模块加起来而不是第一个模块(self):
+        """以前返回「第一份能解析的报告」，在多模块仓库里报的是字母序第一个模块，
+        既不是整体水位，还会随模块改名而跳变。"""
+        self.write("mod-a/target/site/jacoco/jacoco.xml",
+                   JAVA_JACOCO_XML.replace('missed="15" covered="85"',
+                                           'missed="0" covered="100"'))
+        self.write("mod-b/target/site/jacoco/jacoco.xml",
+                   JAVA_JACOCO_XML.replace('missed="15" covered="85"',
+                                           'missed="100" covered="0"'))
+        # 100 覆盖 + 100 未覆盖 = 50%；取第一个模块会得到 100.0
+        self.assertEqual(JavaAdapter(self.root).coverage_from_reports(self.root), 50.0)
+
+    def test_有聚合报告时不把模块报告重复计进去(self):
+        self.write("mod-a/target/site/jacoco/jacoco.xml", JAVA_JACOCO_XML)
+        self.write("target/site/jacoco-aggregate/jacoco.xml",
+                   JAVA_JACOCO_XML.replace('missed="15" covered="85"',
+                                           'missed="50" covered="50"'))
+        self.assertEqual(JavaAdapter(self.root).coverage_from_reports(self.root), 50.0)
+
+    def test_探针没挂上时点名prepare_agent(self):
+        """mvn test jacoco:report 在 pom 没绑 prepare-agent 时会打一行 Skipping
+        然后 BUILD SUCCESS——命令成功了，覆盖率却无从谈起。"""
+        self.make_maven_project()
+        (self.root / "target/site/jacoco/jacoco.xml").unlink()
+        out = ("[INFO] --- jacoco:0.8.11:report (default-cli) @ fixture ---\n"
+               "[INFO] Skipping JaCoCo execution due to missing execution data file.\n"
+               "[INFO] BUILD SUCCESS\n")
+        said = JavaAdapter(self.root).coverage_diagnosis(self.root, output=out)
+        self.assertIn("prepare-agent", said)
+
+    def test_只有exec没有xml时说清是report没跑(self):
+        self.write("pom.xml", "<project/>")
+        self.write("target/jacoco.exec", "二进制内容无关")
+        said = JavaAdapter(self.root).coverage_diagnosis(self.root)
+        self.assertIn("jacoco.exec", said)
+        self.assertIn("jacoco:report", said)
+
+    def test_一份报告都没有时说去哪找了(self):
+        self.write("pom.xml", "<project/>")
+        said = JavaAdapter(self.root).coverage_diagnosis(self.root)
+        self.assertIn("jacoco.xml", said)
+        self.assertIn("jacoco-maven-plugin", said)
+
     def test_jacoco_csv也能算出行覆盖率(self):
         self.write("target/site/jacoco/jacoco.csv",
                    "GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,"
@@ -210,6 +253,11 @@ class Api {
         self.assertEqual(test["kind"], "test")
         self.assertEqual(test["adapter"], "java")
         self.assertIn("jacoco:report", test["argv"])
+        # prepare-agent 必须显式写在 CLI 上且排在 test 前面：pom 只声明插件却没绑它时，
+        # mvn test 不挂探针，jacoco:report 只打一行 Skipping 就成功了
+        argv = test["argv"]
+        self.assertIn("jacoco:prepare-agent", argv)
+        self.assertLess(argv.index("jacoco:prepare-agent"), argv.index("test"))
         self.assertFalse(any(s.get("kind") == "fmt" for s in steps))
 
     def test_监视src而不是模块根(self):

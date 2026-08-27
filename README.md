@@ -19,7 +19,7 @@ adone health        # 六个维度的项目健康度，汇成一页可离线打�
 所以复核这件事不必由写代码的那个模型来做——见[对抗检查](#对抗检查换一个模型来核)。
 
 零第三方依赖，只用 Python 标准库（需要 3.11+，因为用了 `tomllib`）。
-当前版本 **v1.3.2**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.3**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -201,6 +201,78 @@ python3 bin/adone --version
 已有配置、新接入一门生态时，不要用 `adone detect --write`（整份覆盖会冲掉阈值），
 用 `adone detect --merge`：追加新的 `[[gate.step]]`、补 `ecosystems` / `watch_*`，
 不改 `tests.adapter` 除非显式加 `--adopt-tests`。
+
+## Windows
+
+v1.3.2 / v1.3.3 修掉了 Windows 上三处「静默什么都没发生」的坑。装法和别处一样（`pipx install …`），
+`adone` 会落在 `%USERPROFILE%\.local\bin`——**这个目录不在 PATH 里就先加进去**，
+否则 `adone` 敲不出来，钩子也找不到它。
+
+```powershell
+pipx install git+https://github.com/iamharvey/ActuallyDone.git
+adone --version
+```
+
+同一份 `adone.toml` 在 Windows、macOS、Linux 上都能跑，不需要为 Windows 单独配一份：
+
+- **`mvn` / `npm` / `gradle`** 在 Windows 上是 `.cmd` 批处理，而 `CreateProcess` 不查
+  `PATHEXT`。adone 会先把 `argv[0]` 解析成带后缀的全路径再执行，所以 `argv = ["mvn", …]`
+  照常写。1.3.2 之前这里会报「命令不存在」，测试根本没启动。
+- **`./mvnw` / `./gradlew`** 会自动对上 `mvnw.cmd` / `gradlew.bat`，配置里仍写 `./mvnw`。
+- **中文 locale** 下 `mvn` 的输出常常不是 `cp936`，adone 用 `errors="replace"` 解码，
+  不会把「测试失败」误报成「命令跑不起来」。
+
+### 钩子
+
+`adone install --with-hooks` 在 Windows 上写的是 Python 钩子，注册成显式解释器调用
+（`cmd /c py -3 .cursor\hooks\gate-guard.py`），不依赖 shebang 和可执行位——
+那两样是 POSIX 才有的东西，Windows 上 Cursor 起不动，钩子会**静默不触发**：
+Agent 改完代码没人提醒，而这正是本工具存在的理由。
+
+装完跑一次 `adone doctor`。它会真的去解析钩子命令里的解释器，找不到就报出来。
+1.3.2 之前它查的是可执行位（`os.access(X_OK)`），而那在 Windows 上对任何文件恒为真，
+于是「钩子已装」和「钩子从没被触发过」在体检里长得一模一样。
+
+从 1.3.2 之前的版本升上来，务必重渲一次钩子——旧的 `mark-dirty.sh` 是 bash 脚本，
+Windows 上没有 bash 也没有 jq：
+
+```powershell
+adone upgrade
+adone install --hooks-only --force
+adone doctor
+```
+
+钩子有没有真被触发过，看 `.adone\hook.log`：一个空的 `.adone\dirty` 和一个
+从没被改过的仓库长得一样，这个日志是唯一能区分两者的地方。
+
+### 已知的坑
+
+- Cursor 官方文档没有规定 Windows 上钩子命令怎么执行（社区与官方论坛的建议是加
+  `cmd /c`，adone 照此生成）。钩子没反应时先看 Cursor 的 **Hooks 输出通道**。
+- `py` 启动器（python.org 安装器自带）比 `python` 可靠：微软商店的 `python` 别名会
+  打开应用商店而不是跑脚本。adone 装钩子时优先用 `py -3`。
+- Java 的覆盖率步骤要写成 `mvn -B -ntp jacoco:prepare-agent test jacoco:report`，
+  见[下面这一节](#java-的覆盖率读不到)。这跟操作系统无关，但 Java 团队踩得最多。
+
+## Java 的覆盖率读不到
+
+`mvn test jacoco:report` 跑成功了却读不到覆盖率，最常见的原因是 pom 只声明了
+`jacoco-maven-plugin`，没把 `prepare-agent` 绑进构建生命周期。这时 `mvn test`
+不会挂上探针，`jacoco:report` 打一行 `Skipping JaCoCo execution due to missing
+execution data file` 就 **BUILD SUCCESS**——命令成功了，一份报告都没写。
+
+把步骤的 `argv` 改成在 CLI 上显式跑 `prepare-agent`，就不依赖 pom 的绑定：
+
+```toml
+argv = ["mvn", "-B", "-ntp", "jacoco:prepare-agent", "test", "jacoco:report"]
+```
+
+`adone init` 从 v1.3.3 起就这么生成。读不到覆盖率时门禁会指出断在哪一环
+（探针没挂上 / 只有 `.exec` 没有 xml / 一份报告都没找到 / 报告里行计数为空），
+而不是只说一句「没解析到覆盖率数字」。
+
+多模块项目的覆盖率是**各模块行数加起来**算的，不是取第一个模块。
+有 `jacoco-aggregate` 聚合报告时只认聚合报告，免得重复计数。
 
 ## 升级
 
@@ -520,9 +592,10 @@ PATH → ~/.local/bin 等常见落点` 逐个找，全找不到就推「找不�
 它一个技能文件都不碰，不会把你写进技能里的项目私货冲掉；`.cursor/hooks.json`
 是**合并**而不是覆盖，你自己配的其他钩子会原样留着。
 
-装完之后钩子会不会失效，交给 `adone doctor` 定期核：脚本还在不在、可执行位还在不在、
-`hooks.json` 里登记了没有、钩子里烧的那条 adone 路径现在还找不找得到、
-配置改了而钩子还是旧的（比如 `state_dir` 换了，钩子还在往老地方写）。
+装完之后钩子会不会失效，交给 `adone doctor` 定期核：脚本还在不在、`hooks.json` 里
+登记了没有、**登记的那条命令在本机起不起得来**（解释器找得到吗；POSIX 上还看可执行位）、
+钩子里烧的那条 adone 路径现在还找不找得到、配置改了而钩子还是旧的
+（比如 `state_dir` 换了，钩子还在往老地方写）。
 这些都是钩子静默失效的真实形态——不主动去核，你不会知道。
 
 ## 自测
@@ -548,8 +621,12 @@ python3 -m unittest        # 标准库，不引 pytest
 
 ## 限制声明
 
-- **只在 Cursor + macOS + Python 3.11+ 上验证过。** 其他 IDE、其他 Agent 平台、Linux 与
-  Windows 都没有测过。`adone install --target` 预留了别的平台，但没有验证。
+- **开发与自测在 Cursor + macOS + Python 3.11+ 上做。** 其他 IDE、其他 Agent 平台没有测过，
+  `adone install --target` 预留了别的平台但没有验证。
+- **Windows 的支持是「按 Windows 语义实现并有针对性用例」，不是「在 Windows CI 上跑过」。**
+  命令解析（`PATHEXT` / `.cmd`）、钩子注册（显式解释器）、路径分隔符这些都有单独的用例，
+  用注入的方式在 macOS 上也能验证；但仓库里没有 Windows runner，真机上的确认来自
+  接入团队的反馈。在 Windows 上第一次装完，请把 `adone doctor` 的输出看完再信它。
 - 钩子机制依赖 Cursor 的 `hooks.json`；`stop` 钩子只能推消息，不能阻断，这是平台决定的。
 - **需要 Python 3.11+**（标准库 `tomllib`）。钩子进程拿到的 PATH 常常与你终端里的不同——
   本机就发生过钩子被 anaconda 的 3.10 起起来、`import tomllib` 直接失败的事。
