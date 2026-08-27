@@ -239,8 +239,8 @@ class TestHooksJson(ProjectCase):
             self.assertNotIn(".py", cmd)
             self.assertIn(name, cmd)
             if os.name == "nt":
-                self.assertTrue(cmd.startswith("cmd /c"), cmd)
-                self.assertIn(".cmd", cmd)
+                self.assertEqual(cmd, f".cursor/hooks/{name}.cmd")
+                self.assertFalse(install.windows_hook_never_starts(cmd))
 
     def test_旧版bash钩子会被摘掉(self):
         old = {"version": 1, "hooks": {
@@ -269,6 +269,17 @@ class TestHooksJson(ProjectCase):
         self.assertFalse(install.windows_opens_hook_as_file(
             "python3 ./somebody-else.py"))
 
+    def test_cmd_c加cmd路径等于钩子根本不起(self):
+        """1.3.5 的登记。CreateProcess 把整串当文件名，.adone 里不会有 hook.log。"""
+        self.assertTrue(install.windows_hook_never_starts(
+            r"cmd /c .cursor\hooks\gate-guard.cmd"))
+        self.assertTrue(install.windows_hook_never_starts(
+            "cmd /c .cursor/hooks/gate-guard.cmd"))
+        self.assertFalse(install.windows_hook_never_starts(
+            ".cursor/hooks/gate-guard.cmd"))
+        self.assertFalse(install.windows_hook_never_starts(
+            "python3 -m actuallydone hook gate-guard"))
+
     def test_会摘掉把py当命令的旧登记(self):
         old = {"version": 1, "hooks": {
             "stop": [{"command": "cmd /c py -3 .cursor/hooks/gate-guard.py",
@@ -278,9 +289,9 @@ class TestHooksJson(ProjectCase):
         cmd = merged["hooks"]["stop"][0]["command"]
         self.assertNotIn(".py", cmd)
         self.assertIn("gate-guard", cmd)
+        self.assertFalse(install.windows_hook_never_starts(cmd))
         if os.name == "nt":
-            self.assertTrue(cmd.startswith("cmd /c"), cmd)
-            self.assertFalse(install.windows_opens_hook_as_file(cmd))
+            self.assertEqual(cmd, ".cursor/hooks/gate-guard.cmd")
 
 
 class TestInstallFailsLoud(ProjectCase):
@@ -368,9 +379,12 @@ class TestDoctorChecksHooks(ProjectCase):
             p = self.root / ".cursor" / "hooks" / name
             self.assertTrue(p.is_file(), name)
             text = p.read_text(encoding="utf-8")
-            self.assertIn("adone hook", text)
+            self.assertIn("hook %NAME%", text)
+            self.assertIn("hook.log", text)
             self.assertNotIn("gate-guard.py", text)
             self.assertNotIn("%~dpn0.py", text)
+            raw = p.read_bytes()
+            self.assertIn(b"\r\n", raw, "cmd.exe 要 CRLF")
         self.assertFalse((self.root / ".cursor" / "hooks" / "gate-guard.py").exists())
 
     def test_重渲会删掉残留的py(self):

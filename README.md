@@ -19,7 +19,7 @@ adone health        # 六个维度的项目健康度，汇成一页可离线打�
 所以复核这件事不必由写代码的那个模型来做——见[对抗检查](#对抗检查换一个模型来核)。
 
 零第三方依赖，只用 Python 标准库（需要 3.11+，因为用了 `tomllib`）。
-当前版本 **v1.3.5**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.6**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -204,7 +204,7 @@ python3 bin/adone --version
 
 ## Windows
 
-v1.3.2 起修 Windows 上「静默什么都没发生」的坑；v1.3.5 修的是钩子弹出 `.py` 文件。
+v1.3.2 起修 Windows 上「静默什么都没发生」的坑；v1.3.6 修的是钩子进程根本没启动。
 装法和别处一样（`pipx install …`），
 `adone` 会落在 `%USERPROFILE%\.local\bin`——**这个目录不在 PATH 里就先加进去**，
 否则 `adone` 敲不出来，钩子也找不到它。
@@ -225,21 +225,18 @@ adone --version
 
 ### 钩子
 
-`adone install --with-hooks` 在 Windows 上登记的是：
+`adone install --with-hooks` 在 Windows 上登记的是**单独一条相对路径**：
 
 ```text
-cmd /c .cursor\hooks\gate-guard.cmd
+.cursor/hooks/gate-guard.cmd
 ```
 
-`.cmd` 只调用 `adone hook gate-guard`，**整条链路里不能出现 `.py` 路径**。
-逻辑在 adone 包里，不在 `.cursor\hooks\` 目录下。
+不要写成 `cmd /c .cursor\hooks\gate-guard.cmd`。Cursor 会把整串当成一个
+可执行文件名去启动，进程起不来，默认放行——表现就是**不弹 .py，
+`.adone` 里也没有 `hook.log`，钩子等于没装**。这是 1.3.5 的坑。
 
-Cursor 把 `command` 交给操作系统。命令里一旦出现 `.py`（哪怕是 `cmd /c py -3 …py`，
-或 `.cmd` 再去启动旁边的 `.py`），Windows 就按文件关联打开它——Cursor 自己就是
-`.py` 的默认应用，于是**每次弹出 `gate-guard.py`，钩子一行都没跑**。
-
-1.3.4 只改了登记，却把 `.py` 还留在钩子目录里、启动器还去跑它，所以还会弹。
-1.3.5 安装时会**删掉**这些 `.py`。
+`.cmd` 一启动就会写 `.adone\hook.log`，然后调用 `adone hook gate-guard`。
+整条链路里不能出现 `.py` 路径，否则 Windows 按文件关联打开编辑器。
 
 ```powershell
 adone upgrade
@@ -247,14 +244,13 @@ adone install --hooks-only --force
 adone doctor
 ```
 
-然后亲手确认两件事，缺一不可：
+然后亲手确认三件事：
 
-1. `.cursor\hooks\` 里**没有** `gate-guard.py` / `mark-dirty.py`，只有 `.cmd`
-2. `.cursor\hooks.json` 的 `command` 里**没有** `.py`，应是
-   `cmd /c .cursor\hooks\gate-guard.cmd`
+1. `.cursor\hooks.json` 的 `command` **正好是** `.cursor/hooks/gate-guard.cmd`（没有 `cmd /c`，没有 `.py`）
+2. `.cursor\hooks\` 里只有 `.cmd`，没有 `gate-guard.py`
+3. 让 Agent 改一个文件再收工，`.adone\hook.log` 里应出现 `gate-guard launched`
 
-改一个受监视的源文件、让 Agent 收工：应该被推回来重跑 `adone gate run`，
-**不应该再弹出任何 `.py` 文件**。钩子有没有真跑过，看 `.adone\hook.log`。
+没有 `hook.log`，就是 Cursor 没把钩子进程拉起来，先看第 1 条。
 
 ### 已知的坑
 

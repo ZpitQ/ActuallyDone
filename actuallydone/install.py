@@ -162,6 +162,15 @@ def _write(dst: Path, content: str) -> None:
     dst.write_text(content, encoding="utf-8")
 
 
+def _write_cmd(dst: Path, content: str) -> None:
+    """cmd.exe 认 CRLF。从 Mac 写出的 LF 批处理，有的 Windows 会当空文件跳过。"""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    text = content.replace("\r\n", "\n").replace("\n", "\r\n")
+    if not text.endswith("\r\n"):
+        text += "\r\n"
+    dst.write_bytes(text.encode("utf-8"))
+
+
 def _write_failed(cfg: Config, dst, err: OSError, n_done: int) -> int:
     """写不进去时给一句人话。
 
@@ -314,6 +323,16 @@ def windows_opens_hook_as_file(cmd: str) -> bool:
     return not token.lower().endswith((".cmd", ".bat"))
 
 
+def windows_hook_never_starts(cmd: str) -> bool:
+    """`cmd /c .cursor\\hooks\\foo.cmd` 整串当可执行文件名时，进程起不来。
+
+    1.3.5 就是这个：不弹 .py 了，.adone 里也没有 hook.log，钩子等于没装。
+    hooks.json 必须只写 `.cursor/hooks/foo.cmd` 这一条相对路径。
+    """
+    c = cmd.strip().lower()
+    return c.startswith("cmd ") and c.endswith(".cmd") and "/c" in c
+
+
 def _our_commands(events: dict) -> list[str]:
     names = (*OUR_SCRIPTS, *OUR_LAUNCHERS, *LEGACY_SCRIPTS)
     return [str(h.get("command") or "")
@@ -334,6 +353,10 @@ def _launch_problems(cfg: Config, cmd: str) -> list[str]:
                 f"系统按文件关联用编辑器弹出 .py（每次看到 gate-guard.py "
                 f"被打开就是这个）。重渲 adone install --hooks-only --force，"
                 f"会改成登记 .cmd 启动器"]
+    if os.name == "nt" and windows_hook_never_starts(cmd):
+        return [f"钩子命令「{cmd}」在 Windows 上根本起不来："
+                f"整串被当成一个可执行文件名，CreateProcess 失败，"
+                f".adone 里不会有 hook.log。重渲 adone install --hooks-only --force"]
 
     parts = cmd.split()
     if parts and parts[0].lower() in ("cmd", "cmd.exe"):
@@ -416,11 +439,14 @@ def hook_command(name: str, cfg: Config | None = None) -> str:
 
     Windows 上 Cursor 把 command 交给操作系统。命令是路径且后缀是 .py / .sh 时，
     走文件关联——Cursor 自己就是 .py 的默认应用，于是弹出 gate-guard.py。
-    官方论坛的修法：command 以 cmd 开头，指向 .cmd，再由 .cmd 去调 `adone hook`。
+    `.cmd` 是 Windows 认的可执行文件，hooks.json 里只写它的相对路径
+    （官方示例也是相对路径指向脚本）。前面再加 `cmd /c` 时，整串会被当成
+    一个可执行文件名，CreateProcess 失败，钩子根本不起——1.3.5 就是这样：
+    不弹 .py 了，但什么都不发生。
     POSIX 上走 `python3 -m actuallydone hook …` 或仓库内入口，同样不写 .py 路径。
     """
     if os.name == "nt":
-        return f"cmd /c .cursor\\hooks\\{name}.cmd"
+        return f".cursor/hooks/{name}.cmd"
     if cfg is not None:
         entry = adone_entry(cfg)
         if entry:
@@ -476,7 +502,7 @@ def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
     hooks_dir = cfg.root / ".cursor" / "hooks"
     written = 0
 
-    # Windows 启动器：command 以 cmd 开头，指向 .cmd，.cmd 再调 `adone hook`。
+    # Windows 启动器：hooks.json 只写 .cmd 的相对路径，.cmd 再调 `adone hook`。
     # 两边都写，免得 Mac 上装完的仓库拿到 Windows 上还没有启动器。
     launcher = render((TEMPLATES / "hooks" / "hook-launch.cmd").read_text(encoding="utf-8"), v)
     for name in OUR_LAUNCHERS:
@@ -487,7 +513,7 @@ def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
         if args.dry_run:
             print(f"  [演练] 将写入 {dst.relative_to(cfg.root)}")
         else:
-            _write(dst, launcher)
+            _write_cmd(dst, launcher)
             print(f"  写入 {dst.relative_to(cfg.root)}")
         written += 1
 

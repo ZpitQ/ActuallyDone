@@ -2,6 +2,26 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.6 — 2026-08-27
+
+1.3.5 之后不弹 `.py` 了，但 `.adone` 里没有 `hook.log`，钩子仍然不生效。
+
+### 修
+
+- **`cmd /c .cursor\hooks\gate-guard.cmd` 根本起不来**：Cursor 把整串当成一个
+  可执行文件名交给 `CreateProcess`，找不到这个文件，默认放行。所以不弹编辑器，
+  也不写 `hook.log`。hooks.json 改回官方那种**单独一条相对路径**：
+  `.cursor/hooks/gate-guard.cmd`。`.cmd` 是 Windows 认的可执行文件。
+- **`.cmd` 一启动就写 `hook.log`**：不再等 Python 起来才留痕。没有这行，
+  就是 Cursor 没拉起进程。
+- **`.cmd` 用 CRLF 写出**：从 Mac 写出的 LF 批处理，有的 Windows 会当空文件跳过。
+- **不再先跑 `where`**：`where` 可能吃掉 Cursor 喂给钩子的 stdin，后面的
+  `adone hook` 拿到空 payload。
+- **`adone doctor`** 认「`cmd /c …cmd`」这种登记，点名要重渲。
+
+升上来必须 `adone install --hooks-only --force`。重渲后 `hooks.json` 里不能再有
+`cmd /c`。
+
 ## v1.3.5 — 2026-08-27
 
 Windows 上升到 1.3.4 之后，**还是弹出 `gate-guard.py`**。
