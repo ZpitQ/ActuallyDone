@@ -196,13 +196,49 @@ pip install git+https://github.com/iamharvey/ActuallyDone.git
 python3 bin/adone --version
 ```
 
-已经装过的，用 `adone upgrade` 从 GitHub 拉最新版并覆盖当前安装
-（自动识别 pipx / pip / vendor 的 git 工作树）。`--check` 只报告有没有新版本。
-在本工具自己的开发仓库里跑会被拦住：脏工作树或未推送提交都拒绝，除非 `--force`。
+已经装过的，用 [`adone upgrade`](#升级) 从 GitHub 拉最新版并覆盖当前安装。
 
 已有配置、新接入一门生态时，不要用 `adone detect --write`（整份覆盖会冲掉阈值），
 用 `adone detect --merge`：追加新的 `[[gate.step]]`、补 `ecosystems` / `watch_*`，
 不改 `tests.adapter` 除非显式加 `--adopt-tests`。
+
+## 升级
+
+`adone upgrade` 是工具级操作：不读 `adone.toml`，当前目录没有配置也能跑。
+它认出你当初怎么装的，再从 GitHub 拉新版本覆盖那一份，不另开一条安装路径。
+
+```bash
+adone upgrade --check          # 只看有没有新版本，不动手
+adone upgrade                  # 装最新
+adone upgrade --dry-run        # 只打印将执行的命令
+adone upgrade --ref v1.3.0     # 装指定 tag 或分支
+adone upgrade --force          # 允许降级，或在脏的 git 工作树上强制更新
+```
+
+`--check` 的退出码给脚本用：`0` 已是最新，`1` 有新版本，`2` 查不到（离线、限流、仓库信息读不到）。
+
+版本从 GitHub 按这个顺序找，取第一个能用的：Release（`releases/latest`）→ tag → 默认分支上的 `__version__`。
+比较用数字元组，不容 `v1.10` 被字符串排到 `v1.9` 前面。远端不比本地新就说「已是最新」并退出 0；
+远端更旧**拒绝降级**，除非 `--force`。
+
+装法按本包所在路径识别，覆盖对应的那一份：
+
+| 识别到 | 实际执行 |
+| --- | --- |
+| 路径含 `pipx/venvs/actuallydone` | `pipx install --force git+https://github.com/iamharvey/ActuallyDone.git@<ref>` |
+| 父目录是 `site-packages` | `python -m pip install --upgrade git+…@<ref>`（必须走当前解释器的 `-m pip`，裸 `pip` 会装到别的环境） |
+| 上一级是 git 工作树（vendor） | `git fetch --tags && git checkout <ref>` |
+
+git 路径有安全检查：`git status --porcelain` 非空、或有未推送到上游的提交，一律拒绝。
+**在 ActuallyDone 自己的开发仓库里跑必须被拦住**，否则会把未提交的改动 checkout 掉。
+确认要覆盖再加 `--force`。认不出装法时拒绝动手，请你用 pipx 或 pip 重装。
+
+GitHub API 不带 `User-Agent` 会直接 403。遇到限流时设 `GITHUB_TOKEN` 或 `GH_TOKEN` 再试
+（也会读 `X-RateLimit-Reset`）。离线、404、超时都给人话，不丢堆栈。
+
+升完若项目里装了钩子，跑一次 `adone install --hooks-only --force`：
+钩子把安装时的绝对路径烧进了 `ADONE_CMD`，换了位置就会失效，
+失效的样子和「门禁通过」在终端里一模一样。
 
 ## 快速上手
 
@@ -263,6 +299,7 @@ adone health                  # 出一页健康度报告
 | `adone health --with-probes` | 加跑业务不变量探针（可能要服务在跑、可能写库） | 取决于探针 |
 | `adone requirements init` / `check` | 从需求源生成台账骨架 / 核验证据锚点 | 秒级 |
 | `adone install` | 渲染技能与钩子模板到项目；`--hooks-only` 只重装钩子 | 秒级 |
+| `adone upgrade` | 从 GitHub 拉最新版覆盖当前安装；`--check` / `--ref` / `--dry-run` / `--force` | 秒级（下载另计） |
 
 ## 对抗检查：换一个模型来核
 
