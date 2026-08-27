@@ -19,7 +19,7 @@ adone health        # 六个维度的项目健康度，汇成一页可离线打�
 所以复核这件事不必由写代码的那个模型来做——见[对抗检查](#对抗检查换一个模型来核)。
 
 零第三方依赖，只用 Python 标准库（需要 3.11+，因为用了 `tomllib`）。
-当前版本 **v1.3.7**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.8**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -225,18 +225,19 @@ adone --version
 
 ### 钩子
 
-`adone install --with-hooks` 在 Windows 上登记的是**单独一条相对路径**：
+Windows 上 Cursor 把 `hooks.json` 的 `command` 交给 `CreateProcess`。
+**`CreateProcess` 只能起 `.exe`**：`.cmd` 在终端里手跑可以（壳会转给 `cmd.exe`），
+Cursor 直接启动则失败——所以手跑有 `hook.log`、Agent 对话里却像没装钩子。
+不要写 `cmd /c …cmd`（整串当文件名，一样起不来），不要写 `.py`（会打开编辑器）。
+
+`adone install --with-hooks` 登记的是：
 
 ```text
-.cursor/hooks/gate-guard.cmd
+.cursor/hooks/gate-guard.exe
 ```
 
-不要写成 `cmd /c .cursor\hooks\gate-guard.cmd`。Cursor 会把整串当成一个
-可执行文件名去启动，进程起不来，默认放行——表现就是**不弹 .py，
-`.adone` 里也没有 `hook.log`，钩子等于没装**。这是 1.3.5 的坑。
-
-`.cmd` 一启动就会写 `.adone\hook.log`，然后调用 `adone hook gate-guard`。
-整条链路里不能出现 `.py` 路径，否则 Windows 按文件关联打开编辑器。
+安装时把本机的 `adone.exe`（或 `adone-hook-gate-guard.exe`）复制过去。
+这个 `.exe` 是本机生成物，不要提交进仓库。
 
 ```powershell
 adone upgrade
@@ -244,18 +245,18 @@ adone install --hooks-only --force
 adone doctor
 ```
 
-然后亲手确认三件事：
+然后亲手确认：
 
-1. `.cursor\hooks.json` 的 `command` **正好是** `.cursor/hooks/gate-guard.cmd`（没有 `cmd /c`，没有 `.py`）
-2. `.cursor\hooks\` 里只有 `.cmd`，没有 `gate-guard.py`
-3. 让 Agent 改一个文件再收工，`.adone\hook.log` 里应出现 `gate-guard launched`
+1. `.cursor\hooks.json` 的 `command` **正好是** `.cursor/hooks/gate-guard.exe`
+2. `.cursor\hooks\` 里有 `gate-guard.exe` / `mark-dirty.exe`，没有 `.py`
+3. 新开一轮 Agent 对话（不必改文件），`.adone\hook.log` 里应出现 `mark-dirty launched`
 
-没有 `hook.log`，就是 Cursor 没把钩子进程拉起来，先看第 1 条。
+没有 `hook.log`，就是 Cursor 没把 `.exe` 拉起来。看 Output → Hooks，并确认
+工作区是放 `adone.toml` 的那一层。
 
 `hook.log` 写了「已回推」但 Agent 窗口没有那条消息：钩子已经跑完，是 Cursor
-在 Windows 上没收齐 stdout（Execution Log 里会变成 `{}`）。这是官方承认的
-bug。v1.3.7 起 `adone hook` 会按 UTF-8 立刻刷出并多停 200ms。先看
-**View → Output → Hooks** 里这次 `stop` 的 OUTPUT 是完整 JSON 还是 `{}`。
+在 Windows 上没收齐 stdout（Execution Log 里变成 `{}`）。先看
+**View → Output → Hooks** 里这次 `stop` 的 OUTPUT。
 
 ### 已知的坑
 

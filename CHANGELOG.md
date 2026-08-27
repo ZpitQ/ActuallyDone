@@ -2,6 +2,24 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.8 — 2026-08-28
+
+1.3.7 之后手跑 `gate-guard.cmd` 有 `hook.log`，Cursor 自动触发仍然没有。
+
+### 修
+
+- **`CreateProcess` 不能直接跑 `.cmd`**：终端里手跑会经 cmd.exe / PowerShell 转发，
+  所以脚本是好的；Cursor 把 `hooks.json` 的 command 当可执行文件名去启动，
+  批处理起不来，`.adone` 里就没有 `hook.log`。Windows 改为登记
+  `.cursor/hooks/gate-guard.exe`，安装时复制本机 `adone.exe` 或专用入口
+  `adone-hook-*.exe`。cli 按 `argv[0]` 文件名分发到 `hook mark-dirty` /
+  `hook gate-guard`。`.cmd` 仍写出，只给手跑对照。
+- **`adone doctor`** 看见还登记着 `.cmd` 就点名：手跑可以、Cursor 调不起来。
+
+升上来必须 `adone upgrade` 再 `adone install --hooks-only --force`。
+重渲后 `hooks.json` 的 command 必须是 `.exe`，不能再是 `.cmd`。
+`.exe` 是本机生成物，不要提交。
+
 ## v1.3.7 — 2026-08-27
 
 ### 修

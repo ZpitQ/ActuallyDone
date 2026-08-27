@@ -75,6 +75,7 @@ def _load() -> tuple[Config | None, Path]:
 
 def cmd_mark_dirty(_args=None) -> int:
     cfg, root = _load()
+    _log(cfg, "mark-dirty", "launched", root)
     try:
         payload = _payload()
     except Exception as e:
@@ -122,6 +123,7 @@ def _watched(rel: str, roots: list, exts: list) -> bool:
 
 def cmd_gate_guard(_args=None) -> int:
     cfg, root = _load()
+    _log(cfg, "stop", "gate-guard launched", root)
     payload = _payload()
     status = payload.get("status")
     loops = int(payload.get("loop_count") or 0)

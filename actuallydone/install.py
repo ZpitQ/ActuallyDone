@@ -289,10 +289,11 @@ def hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
                         f"重渲 adone install --hooks-only --force 会删掉这些 .py")
 
     if os.name == "nt":
-        for name in OUR_LAUNCHERS:
+        for name in OUR_EXES:
             if not (hooks_dir / name).is_file():
-                problems.append(f"钩子 {name} 不在 .cursor/hooks/ 里，重跑 "
-                                f"adone install --hooks-only --force")
+                problems.append(f"钩子 {name} 不在 .cursor/hooks/ 里：CreateProcess "
+                                f"不能直接跑 .cmd（终端里手跑可以，Cursor 调不起来）。"
+                                f"重跑 adone install --hooks-only --force")
             elif name not in registered:
                 problems.append(f"{name} 在磁盘上，但 .cursor/hooks.json 里没登记它，等于没装")
 
@@ -316,10 +317,48 @@ def hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
 
 
 def _script_registered(name: str, registered: str) -> bool:
-    """hooks.json 里登记的可能是 .py，Windows 上则是同名的 .cmd。"""
+    """hooks.json 里登记的可能是 .py，Windows 上则是同名的 .cmd / .exe。"""
     stem = Path(name).stem
     return (name in registered or f"{stem}.cmd" in registered
-            or f"{stem}.bat" in registered)
+            or f"{stem}.bat" in registered or f"{stem}.exe" in registered)
+
+
+def find_hook_exe(name: str) -> Path | None:
+    """本机用来复制进 .cursor/hooks/<name>.exe 的 PE。
+
+    优先专用入口 adone-hook-<name>.exe（setuptools 烧好的），
+    否则用同目录的 adone.exe（cli 按 argv[0] 文件名分发）。
+    """
+    dedicated = f"adone-hook-{name}"
+    for label in (dedicated, "adone"):
+        w = shutil.which(label) or ""
+        if not w:
+            continue
+        p = Path(w)
+        if p.suffix.lower() == ".exe" and p.is_file():
+            if label == dedicated:
+                return p
+            sib = p.with_name(f"{dedicated}.exe")
+            return sib if sib.is_file() else p
+        exe = p.with_suffix(".exe")
+        if exe.is_file():
+            if label == dedicated:
+                return exe
+            sib = exe.with_name(f"{dedicated}.exe")
+            return sib if sib.is_file() else exe
+    home = Path.home()
+    local = Path(os.environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
+    for d in (
+        home / ".local" / "bin",
+        local / "pipx" / "venvs" / "actuallydone" / "Scripts",
+        home / ".local" / "pipx" / "venvs" / "actuallydone" / "Scripts",
+        home / "AppData" / "Roaming" / "Python" / "Scripts",
+        local / "Programs" / "Python" / "Scripts",
+    ):
+        for cand in (d / f"adone-hook-{name}.exe", d / "adone.exe"):
+            if cand.is_file():
+                return cand
+    return None
 
 
 def windows_opens_hook_as_file(cmd: str) -> bool:
@@ -336,17 +375,23 @@ def windows_opens_hook_as_file(cmd: str) -> bool:
 
 
 def windows_hook_never_starts(cmd: str) -> bool:
-    """`cmd /c .cursor\\hooks\\foo.cmd` 整串当可执行文件名时，进程起不来。
+    """这条命令在 Windows 上 CreateProcess 起不来。
 
-    1.3.5 就是这个：不弹 .py 了，.adone 里也没有 hook.log，钩子等于没装。
-    hooks.json 必须只写 `.cursor/hooks/foo.cmd` 这一条相对路径。
+    CreateProcess 只能起 PE（.exe）。`.cmd` / `.bat` 必须由 cmd.exe 代跑——
+    终端里手跑可以，Cursor 把 command 当可执行文件名去启动时不行。
+    `cmd /c …cmd` 整串当文件名，一样起不来。所以必须登记一条 .exe 路径。
     """
     c = cmd.strip().lower()
-    return c.startswith("cmd ") and c.endswith(".cmd") and "/c" in c
+    if not c:
+        return False
+    if c.startswith("cmd ") and "/c" in c:
+        return True
+    token = c.split()[0]
+    return token.endswith((".cmd", ".bat"))
 
 
 def _our_commands(events: dict) -> list[str]:
-    names = (*OUR_SCRIPTS, *OUR_LAUNCHERS, *LEGACY_SCRIPTS)
+    names = (*OUR_SCRIPTS, *OUR_LAUNCHERS, *OUR_EXES, *LEGACY_SCRIPTS)
     return [str(h.get("command") or "")
             for hooks in (events or {}).values() for h in (hooks or [])
             if any(n in str(h.get("command") or "") for n in names)]
@@ -367,8 +412,9 @@ def _launch_problems(cfg: Config, cmd: str) -> list[str]:
                 f"会改成登记 .cmd 启动器"]
     if os.name == "nt" and windows_hook_never_starts(cmd):
         return [f"钩子命令「{cmd}」在 Windows 上根本起不来："
-                f"整串被当成一个可执行文件名，CreateProcess 失败，"
-                f".adone 里不会有 hook.log。重渲 adone install --hooks-only --force"]
+                f"CreateProcess 不能直接跑 .cmd，也不能把 `cmd /c …` 整串当文件名。"
+                f"终端里手跑可以，Cursor 调不起来，.adone 里不会有 hook.log。"
+                f"重渲 adone install --hooks-only --force，会改成登记 .exe"]
 
     parts = cmd.split()
     if parts and parts[0].lower() in ("cmd", "cmd.exe"):
@@ -378,6 +424,11 @@ def _launch_problems(cfg: Config, cmd: str) -> list[str]:
 
     if len(parts) == 1:
         p = cfg.root / parts[0]
+        if parts[0].lower().endswith(".exe"):
+            if not p.is_file():
+                return [f"钩子命令「{cmd}」指向的 {parts[0]} 不存在："
+                        f"重跑 adone install --hooks-only --force"]
+            return []
         if parts[0].lower().endswith((".cmd", ".bat")):
             if not p.is_file():
                 return [f"钩子命令「{cmd}」指向的 {parts[0]} 不存在"]
@@ -428,8 +479,10 @@ def _resolve_adone(root: Path, entry: str, cmd: str) -> str:
 
 OUR_SCRIPTS = ("mark-dirty.py", "gate-guard.py")
 OUR_LAUNCHERS = ("mark-dirty.cmd", "gate-guard.cmd")
+OUR_EXES = ("mark-dirty.exe", "gate-guard.exe")
 # 早先 afterFileEdit 挂的是 bash 版：Windows 上没有 bash 也没有 jq，Cursor 起不动它。
 # v1.3.3 又改成登记 .py / `cmd /c py -3 …py`：Windows 按文件关联打开 .py。
+# v1.3.4–1.3.7 登记 .cmd：CreateProcess 不能直接跑批处理，手跑可以、钩子不触发。
 # 升级时都要从 hooks.json 里摘掉，否则留着一条永远失败的登记
 LEGACY_SCRIPTS = ("mark-dirty.sh",)
 
@@ -449,16 +502,14 @@ def hook_python() -> str:
 def hook_command(name: str, cfg: Config | None = None) -> str:
     """本机该写进 hooks.json 的 command。整条命令里不能出现 .py 路径。
 
-    Windows 上 Cursor 把 command 交给操作系统。命令是路径且后缀是 .py / .sh 时，
-    走文件关联——Cursor 自己就是 .py 的默认应用，于是弹出 gate-guard.py。
-    `.cmd` 是 Windows 认的可执行文件，hooks.json 里只写它的相对路径
-    （官方示例也是相对路径指向脚本）。前面再加 `cmd /c` 时，整串会被当成
-    一个可执行文件名，CreateProcess 失败，钩子根本不起——1.3.5 就是这样：
-    不弹 .py 了，但什么都不发生。
+    Windows 上 Cursor 把 command 当可执行文件名交给 CreateProcess。
+    CreateProcess 只能起 .exe：`.cmd` 手跑可以（壳会转给 cmd.exe），Cursor
+    直接 CreateProcess 则失败——1.3.4 到 1.3.7 都是这个，.adone 里没有 hook.log。
+    `cmd /c …cmd` 整串当文件名，一样起不来。所以只写一条 .exe 相对路径。
     POSIX 上走 `python3 -m actuallydone hook …` 或仓库内入口，同样不写 .py 路径。
     """
     if os.name == "nt":
-        return f".cursor/hooks/{name}.cmd"
+        return f".cursor/hooks/{name}.exe"
     if cfg is not None:
         entry = adone_entry(cfg)
         if entry:
@@ -497,7 +548,7 @@ def merge_hooks(existing: dict, cfg: Config | None = None) -> tuple[dict, int]:
     out["version"] = out.get("version", 1)
     events = dict(out.get("hooks") or {})
     ours_all = our_hooks(cfg)
-    mine = (*OUR_SCRIPTS, *OUR_LAUNCHERS, *LEGACY_SCRIPTS,
+    mine = (*OUR_SCRIPTS, *OUR_LAUNCHERS, *OUR_EXES, *LEGACY_SCRIPTS,
             "hook mark-dirty", "hook gate-guard")
     kept = 0
     for event, ours in ours_all.items():
@@ -516,8 +567,9 @@ def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
     hooks_dir = cfg.root / ".cursor" / "hooks"
     written = 0
 
-    # Windows 启动器：hooks.json 只写 .cmd 的相对路径，.cmd 再调 `adone hook`。
-    # 两边都写，免得 Mac 上装完的仓库拿到 Windows 上还没有启动器。
+    # Windows：CreateProcess 只能起 .exe。把 adone.exe / 专用入口复制成
+    # .cursor/hooks/<name>.exe，hooks.json 只写这一条相对路径。
+    # .cmd 仍写出，方便在终端里手跑对照；Cursor 不再登记它。
     launcher = render((TEMPLATES / "hooks" / "hook-launch.cmd").read_text(encoding="utf-8"), v)
     for name in OUR_LAUNCHERS:
         dst = hooks_dir / name
@@ -527,8 +579,29 @@ def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
         if args.dry_run:
             print(f"  [演练] 将写入 {dst.relative_to(cfg.root)}")
         else:
-            _write_lf(dst, launcher)   # 必须 LF：Git Bash 的 heredoc 遇 CRLF 合不上分隔符
+            _write_lf(dst, launcher)
             print(f"  写入 {dst.relative_to(cfg.root)}")
+        written += 1
+
+    for stem, dest_name in (("mark-dirty", "mark-dirty.exe"),
+                            ("gate-guard", "gate-guard.exe")):
+        dst = hooks_dir / dest_name
+        src = find_hook_exe(stem)
+        if dst.exists() and not args.force:
+            print(f"  跳过已存在的 {dst.relative_to(cfg.root)}（要覆盖加 --force）")
+            continue
+        if src is None:
+            if os.name == "nt":
+                print(f"  找不到 {dest_name} 的来源（adone.exe / adone-hook-{stem}.exe）："
+                      f"hooks.json 会登记它，但 Cursor 起不来。先 adone upgrade 再 "
+                      f"adone install --hooks-only --force", file=sys.stderr)
+            continue
+        if args.dry_run:
+            print(f"  [演练] 将复制 {src} → {dst.relative_to(cfg.root)}")
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            print(f"  复制 {dst.relative_to(cfg.root)} ← {src}")
         written += 1
 
     # .cursor/hooks/*.py 在 Windows 上会被当成要打开的文件。逻辑已经进了

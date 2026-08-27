@@ -240,7 +240,7 @@ class TestHooksJson(ProjectCase):
             self.assertNotIn(".py", cmd)
             self.assertIn(name, cmd)
             if os.name == "nt":
-                self.assertEqual(cmd, f".cursor/hooks/{name}.cmd")
+                self.assertEqual(cmd, f".cursor/hooks/{name}.exe")
                 self.assertFalse(install.windows_hook_never_starts(cmd))
 
     def test_旧版bash钩子会被摘掉(self):
@@ -270,14 +270,16 @@ class TestHooksJson(ProjectCase):
         self.assertFalse(install.windows_opens_hook_as_file(
             "python3 ./somebody-else.py"))
 
-    def test_cmd_c加cmd路径等于钩子根本不起(self):
-        """1.3.5 的登记。CreateProcess 把整串当文件名，.adone 里不会有 hook.log。"""
+    def test_cmd路径等于CreateProcess起不来(self):
+        """终端里手跑 .cmd 可以（壳转给 cmd.exe）。Cursor 直接 CreateProcess 不行。"""
         self.assertTrue(install.windows_hook_never_starts(
             r"cmd /c .cursor\hooks\gate-guard.cmd"))
         self.assertTrue(install.windows_hook_never_starts(
             "cmd /c .cursor/hooks/gate-guard.cmd"))
-        self.assertFalse(install.windows_hook_never_starts(
+        self.assertTrue(install.windows_hook_never_starts(
             ".cursor/hooks/gate-guard.cmd"))
+        self.assertFalse(install.windows_hook_never_starts(
+            ".cursor/hooks/gate-guard.exe"))
         self.assertFalse(install.windows_hook_never_starts(
             "python3 -m actuallydone hook gate-guard"))
 
@@ -292,7 +294,7 @@ class TestHooksJson(ProjectCase):
         self.assertIn("gate-guard", cmd)
         self.assertFalse(install.windows_hook_never_starts(cmd))
         if os.name == "nt":
-            self.assertEqual(cmd, ".cursor/hooks/gate-guard.cmd")
+            self.assertEqual(cmd, ".cursor/hooks/gate-guard.exe")
 
 
 class TestInstallFailsLoud(ProjectCase):
@@ -404,6 +406,27 @@ class TestDoctorChecksHooks(ProjectCase):
         if proc.returncode == 0:
             self.assertEqual(proc.stdout.strip(), "{}")
 
+    def test_安装会复制exe启动器(self):
+        self.make_go_project()
+        scripts = self.root / "pipx" / "venvs" / "actuallydone" / "Scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "adone.exe").write_bytes(b"MZ")
+        old = os.environ.get("LOCALAPPDATA")
+        os.environ["LOCALAPPDATA"] = str(self.root)
+        try:
+            self.install_hooks()
+        finally:
+            if old is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = old
+        self.assertEqual(
+            (self.root / ".cursor" / "hooks" / "gate-guard.exe").read_bytes(),
+            b"MZ")
+        self.assertEqual(
+            (self.root / ".cursor" / "hooks" / "mark-dirty.exe").read_bytes(),
+            b"MZ")
+
     def test_重渲会删掉残留的py(self):
         self.make_go_project()
         hooks = self.root / ".cursor" / "hooks"
@@ -473,3 +496,32 @@ class TestHookrun(ProjectCase):
         raw = buf.getvalue()
         self.assertIn("完成门禁".encode("utf-8"), raw)
         self.assertTrue(raw.endswith(b"\n"))
+
+    def test_exe文件名就是钩子名(self):
+        """Windows 上 hooks.json 只能写一条 .exe 路径，cli 按 argv[0] 分发。"""
+        from actuallydone.cli import main
+        self.make_go_project()
+        self.write("adone.toml",
+                   "version = 1\n[project]\nname = 'f'\n"
+                   "[gate]\nwatch_roots = ['internal']\nwatch_exts = ['.go']\n")
+        old_argv, old_in = sys.argv, sys.stdin
+        old_cwd = os.getcwd()
+        old_proj = os.environ.get("CURSOR_PROJECT_DIR")
+        sys.argv = [str(self.root / "mark-dirty.exe")]
+        sys.stdin = StringIO("{}")
+        os.chdir(self.root)
+        os.environ["CURSOR_PROJECT_DIR"] = str(self.root)
+        try:
+            with redirect_stdout(StringIO()):
+                rc = main([])
+        finally:
+            os.chdir(old_cwd)
+            sys.argv = old_argv
+            sys.stdin = old_in
+            if old_proj is None:
+                os.environ.pop("CURSOR_PROJECT_DIR", None)
+            else:
+                os.environ["CURSOR_PROJECT_DIR"] = old_proj
+        self.assertEqual(rc, 0)
+        self.assertIn("launched",
+                      (self.root / ".adone" / "hook.log").read_text(encoding="utf-8"))

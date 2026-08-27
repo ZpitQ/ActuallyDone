@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from . import __version__
 from .config import Config, ConfigError
 
+HOOK_STEMS = ("mark-dirty", "gate-guard")
+
 
 def _cfg(args) -> Config:
-    from pathlib import Path
     root = Path(args.root).resolve() if getattr(args, "root", None) else None
     return Config.load(root)
 
@@ -249,6 +251,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # Windows 上 hooks.json 只能写一条 .exe 路径：CreateProcess 不能直接跑 .cmd。
+    # 安装时把 adone.exe 复制成 .cursor/hooks/gate-guard.exe，这里按文件名分发。
+    stem = Path(sys.argv[0]).stem.lower()
+    if stem in HOOK_STEMS and (not argv or argv[0] != "hook"):
+        argv = ["hook", stem, *argv]
     ap = build_parser()
     args = ap.parse_args(argv)
     try:
