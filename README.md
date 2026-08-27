@@ -3,7 +3,7 @@
 当前版本 **v1.3.8**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
-<br/><br/></br>
+<br/><br/>
 
 ## 1. 工具在解决什么
 
@@ -26,7 +26,7 @@ ActuallyDone 提供一条命令 `adone`，让「完成」变成**别人可以独
 诚实的边界：这套机制提高伪造成本，不是密码学级不可伪造。能写工作区的人可以重算整条链。
 真正不可伪造需要 CI 这种 Agent 无权写入的执行者。
 
-<br/><br/></br>
+<br/><br/>
 
 ## 2. 设计架构
 
@@ -45,7 +45,7 @@ ActuallyDone 提供一条命令 `adone`，让「完成」变成**别人可以独
 
 实现者写回执；复核者只写 `.adone/audit.json` / `audit.html`，**不覆盖** `latest.json` 和证据链。
 
-<br/><br/></br>
+<br/><br/>
 
 ## 3. 安装
 
@@ -91,7 +91,7 @@ adone upgrade
 
 升完若项目里装了钩子，再跑一次 `adone install --hooks-only --force`。
 
-<br/><br/></br>
+<br/><br/>
 
 ## 4. Quick start
 
@@ -149,7 +149,7 @@ adone health --open                # 出一页健康度报告并打开
 Windows 上升完必须 `adone install --hooks-only --force`，然后确认 command 是 `.exe`，
 新开一轮 Agent 对话后 `.adone\hook.log` 里应出现 `mark-dirty launched`。
 
-<br/><br/></br>
+<br/><br/>
 
 ## 5. 如何初始化门禁
 
@@ -229,7 +229,7 @@ adone gate run
 
 `doctor` 核命令找不找得到；`gate run` 真跑并写出第一份回执。
 
-<br/><br/></br>
+<br/><br/>
 
 ## 6. 如何更新 / 重置基线
 
@@ -253,7 +253,7 @@ adone policy --accept "把 go vet 并进 build 步骤，命令因此变了"
 
 复核者不允许跑 `--accept` / `--accept-baseline`。
 
-<br/><br/></br>
+<br/><br/>
 
 ## 7. 如何启用新 Agent 做独立审计
 
@@ -284,7 +284,7 @@ adone audit report --open    # 已有 audit.json 时只出 HTML
 结论在 `.adone/audit.json` 和 `.adone/audit.html`。页上会写明核到了哪一层
 （只读证据 / 抽 N 条真跑 / 全量重跑），不要把最弱的一档读成最强。
 
-<br/><br/></br>
+<br/><br/>
 
 ## 8. 如何生成健康报告，以及怎么读
 
@@ -319,7 +319,7 @@ macOS 用 `open`，Linux 用 `xdg-open`，Windows 用系统关联打开。
 - 覆盖率低不扣需求台账的分；扣的是「标了已做、证据没了」。
 - 探针：「跑不起来」是警告，「不变量被破坏」才是错误。
 
-<br/><br/></br>
+<br/><br/>
 
 ## 9. Q&A
 
@@ -327,74 +327,74 @@ macOS 用 `open`，Linux 用 `xdg-open`，Windows 用系统关联打开。
 A：Windows / Linux 都要把 pipx 的 bin 加进 PATH（`~/.local/bin` 或 `%USERPROFILE%\.local\bin`）。
 先 `adone --version` 再谈钩子。
 
-<br/><br/>
+<br/>
 
 **Q：需要哪一版 Python？**  
 A：3.11+。钩子拿到的 PATH 常常和终端不一样，本机发生过被 conda 的 3.10 拉起、
 `import tomllib` 失败。`bin/adone` 会自己找一个够新的解释器；Linux 上还会去
 `~/.local/bin` 和 `~/.pyenv/shims` 翻。
 
-<br/><br/>
+<br/>
 
 **Q：同一份配置能在 Windows、macOS、Linux 跑吗？**  
 A：能。`adone.toml` 里写 `mvn` / `npm` / `./mvnw` 即可，Windows 上会解析成 `.cmd`。
 **钩子不行：** `hooks.json` 按安装那台机器生成。Windows 登记 `.exe`，POSIX 登记 `python3`。
 各人在本机跑 `adone install --hooks-only --force`，不要提交对方的 command，也不要提交 `.exe`。
 
-<br/><br/>
+<br/>
 
 **Q：Windows 上手跑 `gate-guard.cmd` 有 `hook.log`，Agent 里却没触发？**  
 A：`CreateProcess` 不能直接跑 `.cmd`。升到 v1.3.8 后登记必须是 `.cursor/hooks/gate-guard.exe`。
 `cmd /c …cmd` 也不行（整串当文件名）。不要在 `command` 里出现 `.py`（会打开编辑器）。
 
-<br/><br/>
+<br/>
 
 **Q：日志写了「已回推」，对话里没有那条消息？**  
 A：钩子已经跑完。Cursor 在 Windows 上经常没收齐 stdout，Execution Log 里变成 `{}`。
 看 View → Output → Hooks 里这次 `stop` 的 OUTPUT。问题以 `hook.log` 和 `adone gate check` 为准。
 
-<br/><br/>
+<br/>
 
 **Q：工作区开错一层？**  
 A：必须开在放 `adone.toml` 的那一层（或其子目录）。只开子模块时，钩子的工作目录是子模块，
 `CURSOR_PROJECT_DIR` 也对不上。
 
-<br/><br/>
+<br/>
 
 **Q：Java 覆盖率读不到，但 `mvn` 是绿的？**  
 A：把步骤写成 `mvn -B -ntp jacoco:prepare-agent test jacoco:report`。
 只跑 `test jacoco:report` 时，没挂探针也会 BUILD SUCCESS。
 
-<br/><br/>
+<br/>
 
 **Q：`adone detect --write` 把阈值冲掉了？**  
 A：新接入一门生态用 `adone detect --merge`。不要用 `--write` 覆盖已有配置。
 测试适配器除非加 `--adopt-tests`，否则不改。
 
-<br/><br/>
+<br/>
 
 **Q：升级了 adone，钩子却还是旧的？**  
 A：钩子里烧着安装时的绝对路径。`adone upgrade` 之后必须
 `adone install --hooks-only --force`，再 `adone doctor`。
 
-<br/><br/>
+<br/>
 
 **Q：删了基线想让检查闭嘴？**  
 A：上一份回执记着基线指纹，会被拦。要放宽就 `--accept` / `--accept-baseline` 写理由。
 
-<br/><br/>
+<br/>
 
 **Q：独立复核通过 = 不可能造假？**  
 A：不是。复核者和实现者同一台机器、同一套写权限。`--rerun` 只是抬高成本。
 要硬证据，把 `adone gate run` 放到 CI，回执留在 CI 侧。
 
-<br/><br/>
+<br/>
 
 **Q：`generic` 项目为什么很多检查是未评估？**  
 A：generic 适配器只能跑步骤，列不出用例名。假绿、契约、`--spotcheck` 会显示未评估，
 而不是假装通过。
 
-<br/><br/>
+<br/>
 
 **Q：在本仓库里开发时怎么自测？**
 A：```bash
