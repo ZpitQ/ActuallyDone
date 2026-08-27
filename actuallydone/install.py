@@ -109,6 +109,8 @@ def variables(cfg: Config) -> dict[str, str]:
         # 钩子是本机生成物，且它的 PATH 不可控（实测拿到过一个不带 ~/.local/bin 的环境），
         # 所以这里把安装时的绝对路径烧进去。技能文档里仍然只写 adone，不烧机器路径。
         "ADONE_CMD": json.dumps(shutil.which("adone") or "", ensure_ascii=False),
+        # .cmd 启动器用未加引号的 Windows 路径；空串表示装的时候 PATH 里没有
+        "ADONE_CMD_WIN": (shutil.which("adone") or "").replace("/", "\\"),
         "REPO_PATH": str(cfg.root),
         "STATE_DIR": cfg.get("project.state_dir"),
         "MATERIAL_DIR": cfg.get("project.material_dir"),
@@ -249,19 +251,29 @@ def hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
     lines: list[str] = []
     problems: list[str] = []
     hooks_json = cfg.root / ".cursor" / "hooks.json"
-    scripts = {n: cfg.root / ".cursor" / "hooks" / n for n in OUR_SCRIPTS}
-    if not hooks_json.exists() and not any(p.exists() for p in scripts.values()):
+    hooks_dir = cfg.root / ".cursor" / "hooks"
+    launchers = [hooks_dir / n for n in OUR_LAUNCHERS]
+    leftover_py = [hooks_dir / n for n in OUR_SCRIPTS if (hooks_dir / n).is_file()]
+    if not hooks_json.exists() and not any(p.exists() for p in launchers) and not leftover_py:
         lines.append("  钩子：未安装（要装跑 adone install --with-hooks）")
         return lines, problems
 
     events = _read_json(hooks_json).get("hooks") or {}
     registered = json.dumps(events, ensure_ascii=False)
-    for name, path in scripts.items():
-        if not path.exists():
-            problems.append(f"钩子 {name} 不在 .cursor/hooks/ 里，重跑 adone install --hooks-only --force")
-            continue
-        if not _script_registered(name, registered):
-            problems.append(f"{name} 在磁盘上，但 .cursor/hooks.json 里没登记它，等于没装")
+
+    if leftover_py:
+        names = "、".join(p.name for p in leftover_py)
+        problems.append(f"{names} 还在 .cursor/hooks/ 里：Windows 会按文件关联用编辑器"
+                        f"打开它们（每次弹出 gate-guard.py 就是这个）。"
+                        f"重渲 adone install --hooks-only --force 会删掉这些 .py")
+
+    if os.name == "nt":
+        for name in OUR_LAUNCHERS:
+            if not (hooks_dir / name).is_file():
+                problems.append(f"钩子 {name} 不在 .cursor/hooks/ 里，重跑 "
+                                f"adone install --hooks-only --force")
+            elif name not in registered:
+                problems.append(f"{name} 在磁盘上，但 .cursor/hooks.json 里没登记它，等于没装")
 
     for name in LEGACY_SCRIPTS:
         if name in registered:
@@ -272,25 +284,13 @@ def hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
     for cmd in _our_commands(events):
         problems += _launch_problems(cfg, cmd)
 
-    guard = scripts["gate-guard.py"]
-    if guard.exists():
-        text = guard.read_text(encoding="utf-8", errors="replace")
-        entry = _const(text, "ADONE_ENTRY")
-        cmd = _const(text, "ADONE_CMD")
-        found = _resolve_adone(cfg.root, entry, cmd)
-        if found:
-            lines.append(f"  钩子：已装，跑门禁时用 {found}")
-            if cmd and not Path(cmd).is_file() and not entry:
-                problems.append(f"钩子里记的 {cmd} 已经失效，现在靠运行时兜底找到 {found}；"
-                                f"重渲一下（adone install --hooks-only --force）免得兜底也扑空")
-        else:
-            problems.append("钩子找不到 adone（仓库内入口、记下的路径、PATH 都不行）："
-                            "它会把「门禁没跑成」推回给 Agent，等于门禁形同虚设。"
-                            "装好 adone 后重跑 adone install --hooks-only --force")
-        state = _const(text, "STATE_DIR")
-        if state and state != cfg.get("project.state_dir"):
-            problems.append(f"钩子里的 state_dir 还是「{state}」，配置里已经是"
-                            f"「{cfg.get('project.state_dir')}」：钩子在往别处写，重渲一下")
+    found = _resolve_adone(cfg.root, adone_entry(cfg), shutil.which("adone") or "")
+    if found:
+        lines.append(f"  钩子：已装，跑门禁时用 {found} hook")
+    else:
+        problems.append("钩子找不到 adone（仓库内入口、PATH 都不行）："
+                        "它会把「门禁没跑成」推回给 Agent，等于门禁形同虚设。"
+                        "装好 adone 后重跑 adone install --hooks-only --force")
     return lines, problems
 
 
@@ -411,26 +411,30 @@ def hook_python() -> str:
     return "python3"
 
 
-def hook_command(script: str) -> str:
-    """本机该写进 hooks.json 的 command。
+def hook_command(name: str, cfg: Config | None = None) -> str:
+    """本机该写进 hooks.json 的 command。整条命令里不能出现 .py 路径。
 
-    Windows 上必须是 .cmd：Cursor 把 command 交给操作系统去启动，
-    登记 .py 时按文件关联用编辑器打开（每次弹出 gate-guard.py 就是这个）。
-    POSIX 上登记显式解释器调用，不依赖 shebang。
+    Windows 上 Cursor 把 command 交给操作系统。命令是路径且后缀是 .py / .sh 时，
+    走文件关联——Cursor 自己就是 .py 的默认应用，于是弹出 gate-guard.py。
+    官方论坛的修法：command 以 cmd 开头，指向 .cmd，再由 .cmd 去调 `adone hook`。
+    POSIX 上走 `python3 -m actuallydone hook …` 或仓库内入口，同样不写 .py 路径。
     """
     if os.name == "nt":
-        stem = Path(script).stem
-        return f".cursor/hooks/{stem}.cmd"
-    return f"{hook_python()} {script}"
+        return f"cmd /c .cursor\\hooks\\{name}.cmd"
+    if cfg is not None:
+        entry = adone_entry(cfg)
+        if entry:
+            return f"{hook_python()} {entry} hook {name}"
+    return f"{hook_python()} -m actuallydone hook {name}"
 
 
-def our_hooks() -> dict:
+def our_hooks(cfg: Config | None = None) -> dict:
     """本机该写进 hooks.json 的登记。命令随平台变，所以是函数而不是常量。"""
     return {
         "afterFileEdit": [
-            {"command": hook_command(".cursor/hooks/mark-dirty.py"), "timeout": 10}],
+            {"command": hook_command("mark-dirty", cfg), "timeout": 10}],
         "stop": [
-            {"command": hook_command(".cursor/hooks/gate-guard.py"), "timeout": 120,
+            {"command": hook_command("gate-guard", cfg), "timeout": 120,
              "loop_limit": 3, "failClosed": False}],
     }
 
@@ -443,7 +447,7 @@ def _read_json(path: Path) -> dict:
         return {}   # 读不动或不是合法 JSON，就当没有：下面会重新生成一份完整的
 
 
-def merge_hooks(existing: dict) -> tuple[dict, int]:
+def merge_hooks(existing: dict, cfg: Config | None = None) -> tuple[dict, int]:
     """把我们的两个钩子并进已有的 hooks.json，返回（合并结果，保住的外来条目数）。
 
     以前这里是整份覆盖。别人在同一个文件里配了 beforeShellExecution 之类的钩子，
@@ -452,8 +456,9 @@ def merge_hooks(existing: dict) -> tuple[dict, int]:
     out = dict(existing) if existing else {}
     out["version"] = out.get("version", 1)
     events = dict(out.get("hooks") or {})
-    ours_all = our_hooks()
-    mine = (*OUR_SCRIPTS, *OUR_LAUNCHERS, *LEGACY_SCRIPTS)
+    ours_all = our_hooks(cfg)
+    mine = (*OUR_SCRIPTS, *OUR_LAUNCHERS, *LEGACY_SCRIPTS,
+            "hook mark-dirty", "hook gate-guard")
     kept = 0
     for event, ours in ours_all.items():
         foreign = [h for h in (events.get(event) or [])
@@ -470,24 +475,10 @@ def merge_hooks(existing: dict) -> tuple[dict, int]:
 def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
     hooks_dir = cfg.root / ".cursor" / "hooks"
     written = 0
-    for name in OUR_SCRIPTS:
-        src = TEMPLATES / "hooks" / name
-        dst = hooks_dir / name
-        if dst.exists() and not args.force:
-            print(f"  跳过已存在的 {dst.relative_to(cfg.root)}（要覆盖加 --force）")
-            continue
-        content = render(src.read_text(encoding="utf-8"), v)
-        if args.dry_run:
-            print(f"  [演练] 将写入 {dst.relative_to(cfg.root)}")
-        else:
-            _write(dst, content)
-            dst.chmod(0o755)   # POSIX 上直接跑脚本时用得上；Windows 上靠显式解释器
-            print(f"  写入 {dst.relative_to(cfg.root)}")
-        written += 1
 
-    # Windows 启动器：hooks.json 登记的是 .cmd，不是 .py。两边都写，
-    # 免得 Mac 上装完的仓库拿到 Windows 上还得再装一次才有启动器
-    launcher = (TEMPLATES / "hooks" / "hook-launch.cmd").read_text(encoding="utf-8")
+    # Windows 启动器：command 以 cmd 开头，指向 .cmd，.cmd 再调 `adone hook`。
+    # 两边都写，免得 Mac 上装完的仓库拿到 Windows 上还没有启动器。
+    launcher = render((TEMPLATES / "hooks" / "hook-launch.cmd").read_text(encoding="utf-8"), v)
     for name in OUR_LAUNCHERS:
         dst = hooks_dir / name
         if dst.exists() and not args.force:
@@ -500,25 +491,27 @@ def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
             print(f"  写入 {dst.relative_to(cfg.root)}")
         written += 1
 
-    # 旧版 bash 钩子留在磁盘上只会让 doctor 反复报问题，它已经不被登记了
-    for name in LEGACY_SCRIPTS:
+    # .cursor/hooks/*.py 在 Windows 上会被当成要打开的文件。逻辑已经进了
+    # `adone hook`，这些副本必须删掉，否则还会弹出 gate-guard.py。
+    for name in (*OUR_SCRIPTS, *LEGACY_SCRIPTS):
         stale = hooks_dir / name
         if not stale.is_file():
             continue
         if args.dry_run:
-            print(f"  [演练] 将删掉旧版 {stale.relative_to(cfg.root)}")
+            print(f"  [演练] 将删掉 {stale.relative_to(cfg.root)}（Windows 会打开这个文件）")
         else:
             stale.unlink(missing_ok=True)
-            print(f"  删掉旧版 {stale.relative_to(cfg.root)}（已换成 Python 版）")
+            print(f"  删掉 {stale.relative_to(cfg.root)}（钩子逻辑改走 adone hook，"
+                  f"这个文件留着会被编辑器打开）")
 
     cfg_path = cfg.root / ".cursor" / "hooks.json"
     if cfg_path.exists() and not args.force:
         print(f"  跳过已存在的 {cfg_path.relative_to(cfg.root)}（要覆盖加 --force，"
               f"会保留你自己写在里面的其他钩子）；需要的配置是：\n"
-              f"{json.dumps(our_hooks(), ensure_ascii=False, indent=2)}")
+              f"{json.dumps(our_hooks(cfg), ensure_ascii=False, indent=2)}")
         return written
 
-    merged, kept = merge_hooks(_read_json(cfg_path))
+    merged, kept = merge_hooks(_read_json(cfg_path), cfg)
     if args.dry_run:
         print(f"  [演练] 将写入 {cfg_path.relative_to(cfg.root)}"
               + (f"（保留其中 {kept} 条不属于 adone 的钩子）" if kept else ""))

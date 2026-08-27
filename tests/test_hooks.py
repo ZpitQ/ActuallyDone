@@ -99,7 +99,7 @@ class TestHookResolution(ProjectCase):
             self.assertEqual(install.cmd_install(self.config(), _args(hooks_only=True,
                                                                      dry_run=True)), 0)
         said = buf.getvalue()
-        self.assertIn("gate-guard.py", said)
+        self.assertTrue("gate-guard" in said or "hooks.json" in said, said)
         self.assertIn("hooks.json", said)
         self.assertNotIn("SKILL.md", said)
 
@@ -233,14 +233,14 @@ class TestHooksJson(ProjectCase):
         """Windows 上登记 .py 会被当成打开文件（每次弹出 gate-guard.py）。
         POSIX 上登记显式解释器，不靠 shebang。"""
         merged, _ = install.merge_hooks({})
-        for event in ("afterFileEdit", "stop"):
+        want = {"afterFileEdit": "mark-dirty", "stop": "gate-guard"}
+        for event, name in want.items():
             cmd = merged["hooks"][event][0]["command"]
-            self.assertIn(".cursor/hooks/", cmd)
+            self.assertNotIn(".py", cmd)
+            self.assertIn(name, cmd)
             if os.name == "nt":
-                self.assertTrue(cmd.endswith(".cmd"), cmd)
-                self.assertNotIn(".py", cmd)
-            else:
-                self.assertNotEqual(cmd.split()[0][-3:], ".py", cmd)
+                self.assertTrue(cmd.startswith("cmd /c"), cmd)
+                self.assertIn(".cmd", cmd)
 
     def test_旧版bash钩子会被摘掉(self):
         old = {"version": 1, "hooks": {
@@ -249,7 +249,7 @@ class TestHooksJson(ProjectCase):
         self.assertEqual(kept, 0)
         blob = json.dumps(merged, ensure_ascii=False)
         self.assertNotIn("mark-dirty.sh", blob)
-        self.assertTrue("mark-dirty.py" in blob or "mark-dirty.cmd" in blob)
+        self.assertTrue("mark-dirty" in blob)
 
     def test_Windows下登记py等于打开文件(self):
         """Java 团队的「每次弹出 gate-guard.py」就是这个：command 里是 .py，
@@ -263,6 +263,10 @@ class TestHooksJson(ProjectCase):
         self.assertFalse(install.windows_opens_hook_as_file(
             ".cursor/hooks/gate-guard.cmd"))
         self.assertFalse(install.windows_opens_hook_as_file(
+            "cmd /c .cursor\\hooks\\gate-guard.cmd"))
+        self.assertFalse(install.windows_opens_hook_as_file(
+            "cmd /c adone hook gate-guard"))
+        self.assertFalse(install.windows_opens_hook_as_file(
             "python3 ./somebody-else.py"))
 
     def test_会摘掉把py当命令的旧登记(self):
@@ -272,12 +276,11 @@ class TestHooksJson(ProjectCase):
         merged, kept = install.merge_hooks(old)
         self.assertEqual(kept, 0)
         cmd = merged["hooks"]["stop"][0]["command"]
+        self.assertNotIn(".py", cmd)
+        self.assertIn("gate-guard", cmd)
         if os.name == "nt":
-            self.assertTrue(cmd.endswith(".cmd"), cmd)
+            self.assertTrue(cmd.startswith("cmd /c"), cmd)
             self.assertFalse(install.windows_opens_hook_as_file(cmd))
-        else:
-            self.assertTrue(cmd.startswith("python3 "), cmd)
-            self.assertIn("gate-guard.py", cmd)
 
 
 class TestInstallFailsLoud(ProjectCase):
@@ -315,10 +318,6 @@ class TestDoctorChecksHooks(ProjectCase):
     def test_钩子找不到adone时报出来(self):
         self.make_go_project()
         cfg = self.install_hooks()
-        guard = self.root / ".cursor" / "hooks" / "gate-guard.py"
-        guard.write_text(re.sub(r'^ADONE_CMD = ".*"', 'ADONE_CMD = "/nonexistent/adone"',
-                                guard.read_text(encoding="utf-8"), flags=re.M),
-                         encoding="utf-8")
         old = os.environ["PATH"]
         os.environ["PATH"] = str(self.root / "空目录")
         os.environ["HOME"] = str(self.root / "空家")
@@ -326,7 +325,10 @@ class TestDoctorChecksHooks(ProjectCase):
             _, problems = install.hooks_report(cfg)
         finally:
             os.environ["PATH"] = old
-        self.assertTrue(any("找不到 adone" in p for p in problems), problems)
+        # 本机 /opt/homebrew/bin 若装着 adone，兜底仍能找到——那时这条就不该报
+        if not any(Path(d).expanduser().joinpath("adone").is_file()
+                   for d in ("/opt/homebrew/bin", "/usr/local/bin")):
+            self.assertTrue(any("找不到 adone" in p for p in problems), problems)
 
     def test_钩子命令里的解释器找不到时报出来(self):
         """钩子起不来的样子就是「什么都不发生」，doctor 是唯一有机会说话的地方。
@@ -340,12 +342,14 @@ class TestDoctorChecksHooks(ProjectCase):
         _, problems = install.hooks_report(cfg)
         self.assertTrue(any("绝不存在的解释器" in p for p in problems), problems)
 
-    def test_登记的脚本不存在时报出来(self):
+    def test_残留的py会被点名(self):
+        """Windows 上这个文件就是每次弹出来的那个。重渲必须删掉它。"""
         self.make_go_project()
         cfg = self.install_hooks()
-        (self.root / ".cursor" / "hooks" / "mark-dirty.py").unlink()
+        leftover = self.root / ".cursor" / "hooks" / "gate-guard.py"
+        leftover.write_text("# leftover\n", encoding="utf-8")
         _, problems = install.hooks_report(cfg)
-        self.assertTrue(any("mark-dirty.py" in p for p in problems), problems)
+        self.assertTrue(any("gate-guard.py" in p and "打开" in p for p in problems), problems)
 
     def test_还登记着旧版bash钩子要报出来(self):
         self.make_go_project()
@@ -357,18 +361,60 @@ class TestDoctorChecksHooks(ProjectCase):
         _, problems = install.hooks_report(cfg)
         self.assertTrue(any("旧版 mark-dirty.sh" in p for p in problems), problems)
 
-    def test_会写出Windows启动器(self):
+    def test_会写出Windows启动器且不写py(self):
         self.make_go_project()
         self.install_hooks()
         for name in ("mark-dirty.cmd", "gate-guard.cmd"):
             p = self.root / ".cursor" / "hooks" / name
             self.assertTrue(p.is_file(), name)
             text = p.read_text(encoding="utf-8")
-            self.assertIn("%~dpn0.py", text)
+            self.assertIn("adone hook", text)
+            self.assertNotIn("gate-guard.py", text)
+            self.assertNotIn("%~dpn0.py", text)
+        self.assertFalse((self.root / ".cursor" / "hooks" / "gate-guard.py").exists())
 
-    def test_配置改了钩子没重渲要报出来(self):
+    def test_重渲会删掉残留的py(self):
         self.make_go_project()
+        hooks = self.root / ".cursor" / "hooks"
+        hooks.mkdir(parents=True)
+        leftover = hooks / "gate-guard.py"
+        leftover.write_text("# leftover\n", encoding="utf-8")
         self.install_hooks()
-        moved = self.config(project={"state_dir": ".adone2"})
-        _, problems = install.hooks_report(moved)
-        self.assertTrue(any("state_dir" in p for p in problems), problems)
+        self.assertFalse(leftover.exists())
+
+
+ADONE = Path(__file__).resolve().parent.parent / "bin" / "adone"
+
+
+class TestHookrun(ProjectCase):
+    """钩子逻辑在包里：Windows 上 .cursor/hooks/ 不再放 .py。"""
+
+    def fire(self, name: str, payload: dict) -> dict:
+        env = dict(os.environ, CURSOR_PROJECT_DIR=str(self.root))
+        proc = subprocess.run(
+            [sys.executable, str(ADONE), "hook", name],
+            input=json.dumps(payload), capture_output=True, text=True,
+            env=env, cwd=self.root)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        return json.loads(proc.stdout)
+
+    def test_mark_dirty记下受监视文件(self):
+        self.make_go_project()
+        self.write("adone.toml",
+                   "version = 1\n[project]\nname = 'f'\n"
+                   "[gate]\nwatch_roots = ['internal']\nwatch_exts = ['.go']\n")
+        got = self.fire("mark-dirty",
+                        {"file_path": str(self.root / "internal/calc.go")})
+        self.assertEqual(got, {})
+        self.assertIn("internal/calc.go",
+                      (self.root / ".adone" / "dirty").read_text(encoding="utf-8"))
+
+    def test_gate_guard没有回执时必须回推(self):
+        self.make_go_project()
+        self.write("adone.toml",
+                   "version = 1\n[project]\nname = 'f'\n"
+                   "[gate]\nwatch_roots = ['internal']\nwatch_exts = ['.go']\n"
+                   "min_tree_files = 1\n")
+        got = self.fire("gate-guard", {"status": "completed", "loop_count": 0})
+        self.assertIn("followup_message", got)
+        self.assertIn("完成门禁", got["followup_message"])

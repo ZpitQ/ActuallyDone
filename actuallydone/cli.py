@@ -106,6 +106,11 @@ def cmd_upgrade(args) -> int:
     return run(args)
 
 
+def cmd_hook(args) -> int:
+    from .hookrun import cmd_hook as run
+    return run(args)
+
+
 # --------------------------------------------------------------------------- 装配
 
 def build_parser() -> argparse.ArgumentParser:
@@ -224,6 +229,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="覆盖已存在的技能文件")
     p.add_argument("--dry-run", action="store_true", help="只说要做什么，不落盘")
     p.set_defaults(func=cmd_install)
+
+    p = sub.add_parser("hook", help="给 Cursor 钩子调用：逻辑在包里，不在 .cursor/hooks/*.py")
+    p.add_argument("hook", choices=["mark-dirty", "gate-guard"],
+                   help="afterFileEdit 用 mark-dirty，stop 用 gate-guard")
+    p.set_defaults(func=cmd_hook)
 
     p = sub.add_parser("upgrade", help="从 GitHub 拉最新版并覆盖当前安装")
     p.add_argument("--check", action="store_true",

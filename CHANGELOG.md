@@ -2,6 +2,25 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.5 — 2026-08-27
+
+Windows 上升到 1.3.4 之后，**还是弹出 `gate-guard.py`**。
+
+### 修
+
+- **`.cursor/hooks/` 里不能留 `.py`**：v1.3.4 登记了 `.cmd`，但启动器仍去跑旁边的
+  `gate-guard.py`，而且那个文件还在钩子目录里。Windows 按文件关联打开 `.py`
+  （Cursor 自己就是默认应用），于是每次弹出文件，钩子仍没执行。
+  官方论坛的修法是 `command` 以 `cmd` 开头，且**整条命令里不能出现 `.py` 路径**。
+- **钩子逻辑改走 `adone hook`**：`mark-dirty` / `gate-guard` 进了包本身。
+  Windows 的 `hooks.json` 登记 `cmd /c .cursor\hooks\gate-guard.cmd`，
+  `.cmd` 只调用 `adone hook gate-guard`（或 `py -3 -m actuallydone hook …`），
+  不再点任何 `.py` 文件。安装时会**删掉**残留的 `gate-guard.py` / `mark-dirty.py`。
+- **`adone doctor`**：钩子目录里还留着 `.py` 就点名「会被编辑器打开」。
+
+升上来必须 `adone install --hooks-only --force`。然后确认：
+`.cursor\hooks\` 里没有 `.py`，`hooks.json` 的 `command` 里也没有 `.py`。
+
 ## v1.3.4 — 2026-08-27
 
 Windows 上钩子「已安装」但每次弹出 `gate-guard.py`、改完代码不重跑门禁。

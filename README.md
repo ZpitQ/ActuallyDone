@@ -19,7 +19,7 @@ adone health        # 六个维度的项目健康度，汇成一页可离线打�
 所以复核这件事不必由写代码的那个模型来做——见[对抗检查](#对抗检查换一个模型来核)。
 
 零第三方依赖，只用 Python 标准库（需要 3.11+，因为用了 `tomllib`）。
-当前版本 **v1.3.4**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.5**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -204,7 +204,7 @@ python3 bin/adone --version
 
 ## Windows
 
-v1.3.2 起修 Windows 上「静默什么都没发生」的坑；v1.3.4 修的是钩子弹出 `.py` 文件。
+v1.3.2 起修 Windows 上「静默什么都没发生」的坑；v1.3.5 修的是钩子弹出 `.py` 文件。
 装法和别处一样（`pipx install …`），
 `adone` 会落在 `%USERPROFILE%\.local\bin`——**这个目录不在 PATH 里就先加进去**，
 否则 `adone` 敲不出来，钩子也找不到它。
@@ -225,22 +225,21 @@ adone --version
 
 ### 钩子
 
-`adone install --with-hooks` 在 Windows 上登记的是 `.cmd` 启动器
-（`.cursor/hooks/gate-guard.cmd`），不是 `.py`。
+`adone install --with-hooks` 在 Windows 上登记的是：
 
-Cursor 把 `hooks.json` 的 `command` 交给操作系统去启动。登记 `.py` 时，
-Windows 按文件关联用默认应用打开它——Cursor 自己就是 `.py` 的默认应用，
-于是**每次弹出 `gate-guard.py`，脚本一行都没跑**，Agent 改完代码没人提醒。
-这就是「钩子提示已安装，但改文件不重跑门禁」的样子。
+```text
+cmd /c .cursor\hooks\gate-guard.cmd
+```
 
-`.cmd` 才是 Windows 认的可执行文件：启动器找到 `py` / `python` 再去跑旁边的 `.py`。
-POSIX 上仍然登记 `python3 .cursor/hooks/gate-guard.py`。
+`.cmd` 只调用 `adone hook gate-guard`，**整条链路里不能出现 `.py` 路径**。
+逻辑在 adone 包里，不在 `.cursor\hooks\` 目录下。
 
-装完跑一次 `adone doctor`。它会认「登记的是 .py」这件事，并点名要重渲。
-1.3.2 之前它查的是可执行位（`os.access(X_OK)`），那在 Windows 上恒为真；
-1.3.3 改成了 `cmd /c py -3 …py`，命令里仍有 `.py`，文件照样被打开。
+Cursor 把 `command` 交给操作系统。命令里一旦出现 `.py`（哪怕是 `cmd /c py -3 …py`，
+或 `.cmd` 再去启动旁边的 `.py`），Windows 就按文件关联打开它——Cursor 自己就是
+`.py` 的默认应用，于是**每次弹出 `gate-guard.py`，钩子一行都没跑**。
 
-升上来务必重渲一次钩子：
+1.3.4 只改了登记，却把 `.py` 还留在钩子目录里、启动器还去跑它，所以还会弹。
+1.3.5 安装时会**删掉**这些 `.py`。
 
 ```powershell
 adone upgrade
@@ -248,12 +247,14 @@ adone install --hooks-only --force
 adone doctor
 ```
 
-重渲之后打开 `.cursor\hooks.json`，`stop` 的 `command` 必须是
-`.cursor/hooks/gate-guard.cmd`，**不能再出现 `.py`**。然后改一个受监视的源文件、
-让 Agent 收工：应该被推回来重跑 `adone gate run`，**不应该再弹出 `gate-guard.py`**。
+然后亲手确认两件事，缺一不可：
 
-钩子有没有真被触发过，看 `.adone\hook.log`：一个空的 `.adone\dirty` 和一个
-从没被改过的仓库长得一样，这个日志是唯一能区分两者的地方。
+1. `.cursor\hooks\` 里**没有** `gate-guard.py` / `mark-dirty.py`，只有 `.cmd`
+2. `.cursor\hooks.json` 的 `command` 里**没有** `.py`，应是
+   `cmd /c .cursor\hooks\gate-guard.cmd`
+
+改一个受监视的源文件、让 Agent 收工：应该被推回来重跑 `adone gate run`，
+**不应该再弹出任何 `.py` 文件**。钩子有没有真跑过，看 `.adone\hook.log`。
 
 ### 已知的坑
 
