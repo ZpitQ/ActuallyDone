@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -64,6 +65,11 @@ class TestBootstrap(ProjectCase):
         seen = bootstrap.candidates(which=lambda n: None,
                                     isfile=lambda p: p == "/opt/homebrew/bin/python3.13")
         self.assertEqual(seen, ["/opt/homebrew/bin/python3.13"])
+
+    def test_Linux用户目录也在候选里(self):
+        local = os.path.expanduser("~/.local/bin/python3.12")
+        seen = bootstrap.candidates(which=lambda n: None, isfile=lambda p: p == local)
+        self.assertEqual(seen, [local])
 
     def test_解释器够新时什么都不做(self):
         self.assertGreaterEqual(sys.version_info, bootstrap.MIN_VERSION)

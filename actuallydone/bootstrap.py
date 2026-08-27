@@ -20,9 +20,18 @@ MIN_VERSION = (3, 11)          # tomllib 进标准库的版本
 GUARD_ENV = "ADONE_BOOTSTRAPPED"
 # 明写版本号的名字优先：PATH 里的 python3 指向谁完全看运气
 CANDIDATE_NAMES = ("python3.14", "python3.13", "python3.12", "python3.11", "python3")
-# 钩子拿到的 PATH 可能很干净，PATH 里翻不着就去这些常见位置找
+# 钩子拿到的 PATH 可能很干净，PATH 里翻不着就去这些常见位置找。
+# Linux 上 pipx / 用户级 Python 落在 ~/.local/bin；pyenv 在 ~/.pyenv/shims。
 EXTRA_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin",
               "/Library/Frameworks/Python.framework/Versions/Current/bin")
+
+
+def extra_dirs():
+    home = os.path.expanduser("~")
+    return EXTRA_DIRS + (
+        os.path.join(home, ".local", "bin"),
+        os.path.join(home, ".pyenv", "shims"),
+    )
 
 
 def has_tomllib(exe):
@@ -45,7 +54,7 @@ def candidates(which=None, isfile=None):
         found = which(name)
         if found and found not in out:
             out.append(found)
-        for d in EXTRA_DIRS:
+        for d in extra_dirs():
             path = os.path.join(d, name)
             if isfile(path) and path not in out:
                 out.append(path)

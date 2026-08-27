@@ -2,6 +2,12 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 未发布
+
+- **Linux**：`--open` 用 `xdg-open`（macOS 仍用 `open`，Windows 改 `os.startfile`）。
+  钩子换解释器时会去 `~/.local/bin`、`~/.pyenv/shims`、`/usr/bin` 找 3.11+。
+- README 按「内涵 → 架构 → 安装 → 上手 → 门禁 → 基线 → 审计 → 健康报告 → Q&A」重排。
+
 ## v1.3.8 — 2026-08-28
 
 1.3.7 之后手跑 `gate-guard.cmd` 有 `hook.log`，Cursor 自动触发仍然没有。

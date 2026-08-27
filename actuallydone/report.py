@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import html
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -188,8 +189,14 @@ def render(results: list[DimResult], out: Path, total: int, ran_keys: list[str],
 
 
 def open_report(path: Path) -> None:
-    opener = "open" if sys.platform == "darwin" else "xdg-open"
-    subprocess.run([opener, str(path)], check=False)
+    """按本机打开 HTML：macOS 用 open，Linux 用 xdg-open，Windows 用 startfile。"""
+    target = str(path)
+    if sys.platform == "darwin":
+        subprocess.run(["open", target], check=False)
+    elif sys.platform == "win32":
+        os.startfile(target)  # type: ignore[attr-defined]
+    else:
+        subprocess.run(["xdg-open", target], check=False)
 
 
 def _short(h) -> str:

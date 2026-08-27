@@ -466,7 +466,7 @@ def _resolve_adone(root: Path, entry: str, cmd: str) -> str:
     if on_path:
         return on_path
     for d in ("~/.local/bin", "~/.local/pipx/venvs/actuallydone/bin",
-              "/opt/homebrew/bin", "/usr/local/bin",
+              "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin",
               "~/.local/pipx/venvs/actuallydone/Scripts",
               "~/AppData/Roaming/Python/Scripts",
               "~/AppData/Local/Programs/Python/Scripts"):
