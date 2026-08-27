@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -44,7 +45,23 @@ def _log(cfg: Config | None, event: str, msg: str, root: Path | None = None) -> 
 
 
 def _emit(obj: dict) -> int:
-    print(json.dumps(obj, ensure_ascii=False))
+    """把钩子结果写到 stdout。Windows 上必须立刻刷出，并多等一小会儿。
+
+    Cursor 在 Windows 上经过 PowerShell 收 stdout：进程一退出就当收完，
+    管道里还没到的字节会被丢掉。Execution Log 里变成 `{}`，Agent 窗口
+    看不到 followup_message——官方承认这是他们的 bug。
+    中文走系统代码页（cp936）时，Node 端按 UTF-8 解析也会失败，同样像没回推。
+    """
+    data = json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n"
+    buf = getattr(sys.stdout, "buffer", None)
+    if buf is not None:
+        buf.write(data)
+        buf.flush()
+    else:
+        sys.stdout.write(data.decode("utf-8"))
+        sys.stdout.flush()
+    if obj.get("followup_message") and os.name == "nt":
+        time.sleep(0.2)
     return 0
 
 

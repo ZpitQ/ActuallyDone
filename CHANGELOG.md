@@ -2,6 +2,20 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.7 — 2026-08-27
+
+### 修
+
+- **Windows 上日志写了「已回推」，Agent 窗口却没有**：`adone hook` 的 JSON
+  改为按 UTF-8 立刻刷出，有 `followup_message` 时再多停 200ms。Cursor 在
+  Windows 上经过 PowerShell 收 stdout，进程一退出就把管道当收完，Execution
+  Log 里变成 `{}`，对话不会出现回推——这是官方承认的 bug，不是脚本没输出。
+  升 `adone` 即可，不必重渲钩子。
+- **Cursor 在 Windows 上可能用 Git Bash 起钩子**：纯 `.cmd` 被当成 shell 脚本，
+  第一行 `@echo off` 就失败。启动器改成 cmd/bash 双语。文件必须按字节写 LF
+  （`Path.write_text` 在 Windows 上会变成 CRLF，heredoc 合不上）。
+- **`sessionStart` 探针**：打开一轮 Agent 对话就会写 `hook.log`。
+
 ## v1.3.6 — 2026-08-27
 
 1.3.5 之后不弹 `.py` 了，但 `.adone` 里没有 `hook.log`，钩子仍然不生效。

@@ -233,7 +233,8 @@ class TestHooksJson(ProjectCase):
         """Windows 上登记 .py 会被当成打开文件（每次弹出 gate-guard.py）。
         POSIX 上登记显式解释器，不靠 shebang。"""
         merged, _ = install.merge_hooks({})
-        want = {"afterFileEdit": "mark-dirty", "stop": "gate-guard"}
+        want = {"sessionStart": "mark-dirty", "afterFileEdit": "mark-dirty",
+                "stop": "gate-guard"}
         for event, name in want.items():
             cmd = merged["hooks"][event][0]["command"]
             self.assertNotIn(".py", cmd)
@@ -380,12 +381,28 @@ class TestDoctorChecksHooks(ProjectCase):
             self.assertTrue(p.is_file(), name)
             text = p.read_text(encoding="utf-8")
             self.assertIn("hook %NAME%", text)
+            self.assertIn('<<"::::"', text)
+            self.assertIn("launched via sh", text)
             self.assertIn("hook.log", text)
             self.assertNotIn("gate-guard.py", text)
-            self.assertNotIn("%~dpn0.py", text)
-            raw = p.read_bytes()
-            self.assertIn(b"\r\n", raw, "cmd.exe 要 CRLF")
+            self.assertNotIn(b"\r\n", p.read_bytes(), "LF：Git Bash 的 heredoc 遇 CRLF 合不上")
         self.assertFalse((self.root / ".cursor" / "hooks" / "gate-guard.py").exists())
+
+    def test_启动器在bash下也能写出hooklog(self):
+        """Cursor 在 Windows 上可能用 Git Bash 起钩子。纯 cmd 文件第一行就死，
+        所以 1.3.6 的 .adone 里没有 hook.log。"""
+        self.make_go_project()
+        self.install_hooks()
+        hook = self.root / ".cursor" / "hooks" / "mark-dirty.cmd"
+        env = dict(os.environ, CURSOR_PROJECT_DIR=str(self.root))
+        proc = subprocess.run(["bash", str(hook)], input="{}",
+                              capture_output=True, text=True, env=env, cwd=self.root)
+        log = (self.root / ".adone" / "hook.log").read_text(encoding="utf-8")
+        self.assertIn("launched via sh", log)
+        # 写日志在 exec adone 之前。PATH 上可能是没有 hook 子命令的旧版，
+        # 那一截失败不影响「bash 能跑到写 hook.log」这条回归。
+        if proc.returncode == 0:
+            self.assertEqual(proc.stdout.strip(), "{}")
 
     def test_重渲会删掉残留的py(self):
         self.make_go_project()
@@ -432,3 +449,27 @@ class TestHookrun(ProjectCase):
         got = self.fire("gate-guard", {"status": "completed", "loop_count": 0})
         self.assertIn("followup_message", got)
         self.assertIn("完成门禁", got["followup_message"])
+
+    def test_回推JSON按UTF8写出(self):
+        """Windows 上 stdout 默认 cp936 时，Cursor 按 UTF-8 解析会失败，
+        对话里就像没回推。"""
+        from io import BytesIO
+        from actuallydone import hookrun
+
+        buf = BytesIO()
+
+        class Out:
+            buffer = buf
+
+            def flush(self):
+                pass
+
+        old = sys.stdout
+        sys.stdout = Out()
+        try:
+            hookrun._emit({"followup_message": "【完成门禁未通过】"})
+        finally:
+            sys.stdout = old
+        raw = buf.getvalue()
+        self.assertIn("完成门禁".encode("utf-8"), raw)
+        self.assertTrue(raw.endswith(b"\n"))

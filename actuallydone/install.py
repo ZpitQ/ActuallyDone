@@ -163,11 +163,23 @@ def _write(dst: Path, content: str) -> None:
 
 
 def _write_cmd(dst: Path, content: str) -> None:
-    """cmd.exe 认 CRLF。从 Mac 写出的 LF 批处理，有的 Windows 会当空文件跳过。"""
+    """cmd.exe 认 CRLF。从 Mac 写出的 LF 批处理，有的 Windows 会当空文件跳过。
+
+    不要用于 hook-launch.cmd：那是 cmd/bash 双语，heredoc 遇 CRLF 合不上。
+    """
     dst.parent.mkdir(parents=True, exist_ok=True)
     text = content.replace("\r\n", "\n").replace("\n", "\r\n")
     if not text.endswith("\r\n"):
         text += "\r\n"
+    dst.write_bytes(text.encode("utf-8"))
+
+
+def _write_lf(dst: Path, content: str) -> None:
+    """按 LF 落盘，不走 write_text（Windows 上会变成 CRLF）。"""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    text = content.replace("\r\n", "\n")
+    if not text.endswith("\n"):
+        text += "\n"
     dst.write_bytes(text.encode("utf-8"))
 
 
@@ -457,6 +469,8 @@ def hook_command(name: str, cfg: Config | None = None) -> str:
 def our_hooks(cfg: Config | None = None) -> dict:
     """本机该写进 hooks.json 的登记。命令随平台变，所以是函数而不是常量。"""
     return {
+        "sessionStart": [
+            {"command": hook_command("mark-dirty", cfg), "timeout": 10}],
         "afterFileEdit": [
             {"command": hook_command("mark-dirty", cfg), "timeout": 10}],
         "stop": [
@@ -513,7 +527,7 @@ def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
         if args.dry_run:
             print(f"  [演练] 将写入 {dst.relative_to(cfg.root)}")
         else:
-            _write_cmd(dst, launcher)
+            _write_lf(dst, launcher)   # 必须 LF：Git Bash 的 heredoc 遇 CRLF 合不上分隔符
             print(f"  写入 {dst.relative_to(cfg.root)}")
         written += 1
 

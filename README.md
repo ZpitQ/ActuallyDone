@@ -19,7 +19,7 @@ adone health        # 六个维度的项目健康度，汇成一页可离线打�
 所以复核这件事不必由写代码的那个模型来做——见[对抗检查](#对抗检查换一个模型来核)。
 
 零第三方依赖，只用 Python 标准库（需要 3.11+，因为用了 `tomllib`）。
-当前版本 **v1.3.6**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.7**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -251,6 +251,11 @@ adone doctor
 3. 让 Agent 改一个文件再收工，`.adone\hook.log` 里应出现 `gate-guard launched`
 
 没有 `hook.log`，就是 Cursor 没把钩子进程拉起来，先看第 1 条。
+
+`hook.log` 写了「已回推」但 Agent 窗口没有那条消息：钩子已经跑完，是 Cursor
+在 Windows 上没收齐 stdout（Execution Log 里会变成 `{}`）。这是官方承认的
+bug。v1.3.7 起 `adone hook` 会按 UTF-8 立刻刷出并多停 200ms。先看
+**View → Output → Hooks** 里这次 `stop` 的 OUTPUT 是完整 JSON 还是 `{}`。
 
 ### 已知的坑
 
