@@ -260,7 +260,7 @@ def hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
         if not path.exists():
             problems.append(f"钩子 {name} 不在 .cursor/hooks/ 里，重跑 adone install --hooks-only --force")
             continue
-        if name not in registered:
+        if not _script_registered(name, registered):
             problems.append(f"{name} 在磁盘上，但 .cursor/hooks.json 里没登记它，等于没装")
 
     for name in LEGACY_SCRIPTS:
@@ -294,8 +294,28 @@ def hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
     return lines, problems
 
 
+def _script_registered(name: str, registered: str) -> bool:
+    """hooks.json 里登记的可能是 .py，Windows 上则是同名的 .cmd。"""
+    stem = Path(name).stem
+    return (name in registered or f"{stem}.cmd" in registered
+            or f"{stem}.bat" in registered)
+
+
+def windows_opens_hook_as_file(cmd: str) -> bool:
+    """这条命令在 Windows 上会不会被当成「打开文件」而不是「执行脚本」。
+
+    Cursor 把 hooks.json 的 command 交给操作系统去启动。登记 `.py` 时，
+    Windows 按文件关联用默认应用打开它——Cursor 自己就是 .py 的默认应用，
+    于是每次弹出 gate-guard.py，脚本一行都没跑。必须登记 .cmd。
+    """
+    if not any(n in cmd for n in OUR_SCRIPTS):
+        return False
+    token = cmd.strip().split()[0] if cmd.strip() else ""
+    return not token.lower().endswith((".cmd", ".bat"))
+
+
 def _our_commands(events: dict) -> list[str]:
-    names = (*OUR_SCRIPTS, *LEGACY_SCRIPTS)
+    names = (*OUR_SCRIPTS, *OUR_LAUNCHERS, *LEGACY_SCRIPTS)
     return [str(h.get("command") or "")
             for hooks in (events or {}).values() for h in (hooks or [])
             if any(n in str(h.get("command") or "") for n in names)]
@@ -309,18 +329,28 @@ def _launch_problems(cfg: Config, cmd: str) -> list[str]:
     Java 团队就是这么被坑的：Agent 改完代码没人提醒，doctor 却说钩子已装。
     """
     from .gate import resolve_cmd
+    if os.name == "nt" and windows_opens_hook_as_file(cmd):
+        return [f"钩子命令「{cmd}」在 Windows 上会打开文件而不是执行："
+                f"系统按文件关联用编辑器弹出 .py（每次看到 gate-guard.py "
+                f"被打开就是这个）。重渲 adone install --hooks-only --force，"
+                f"会改成登记 .cmd 启动器"]
+
     parts = cmd.split()
-    if parts and parts[0] == "cmd":
+    if parts and parts[0].lower() in ("cmd", "cmd.exe"):
         parts = parts[2:] if len(parts) > 2 and parts[1].lower() in ("/c", "/k") else parts[1:]
     if not parts:
         return []
 
     if len(parts) == 1:
+        p = cfg.root / parts[0]
+        if parts[0].lower().endswith((".cmd", ".bat")):
+            if not p.is_file():
+                return [f"钩子命令「{cmd}」指向的 {parts[0]} 不存在"]
+            return []
         # 只有脚本路径：靠 shebang 加可执行位启动，这是 POSIX 才成立的约定
         if os.name == "nt":
             return [f"钩子命令「{cmd}」在 Windows 上起不动：shebang 与可执行位是 POSIX "
                     f"才有的东西。重渲一下 adone install --hooks-only --force"]
-        p = cfg.root / parts[0]
         if p.exists() and not os.access(p, os.X_OK):
             return [f"钩子 {parts[0]} 没有可执行位，Cursor 起不动它（chmod +x 或重装钩子）"]
         return []
@@ -362,8 +392,10 @@ def _resolve_adone(root: Path, entry: str, cmd: str) -> str:
 
 
 OUR_SCRIPTS = ("mark-dirty.py", "gate-guard.py")
+OUR_LAUNCHERS = ("mark-dirty.cmd", "gate-guard.cmd")
 # 早先 afterFileEdit 挂的是 bash 版：Windows 上没有 bash 也没有 jq，Cursor 起不动它。
-# 升级时要把它从 hooks.json 里摘掉，否则留着一条永远失败的登记
+# v1.3.3 又改成登记 .py / `cmd /c py -3 …py`：Windows 按文件关联打开 .py。
+# 升级时都要从 hooks.json 里摘掉，否则留着一条永远失败的登记
 LEGACY_SCRIPTS = ("mark-dirty.sh",)
 
 
@@ -380,16 +412,15 @@ def hook_python() -> str:
 
 
 def hook_command(script: str) -> str:
-    """注册显式解释器调用，而不是脚本路径本身。
+    """本机该写进 hooks.json 的 command。
 
-    shebang 与可执行位是 POSIX 才有的东西。以前直接注册 `.cursor/hooks/gate-guard.py`，
-    Windows 上 Cursor 起不动，钩子静默不触发——Agent 改完代码没人提醒，
-    而这正是本工具要防的「检查失效长得像检查通过」。
-    官方文档的 Python 示例（`python3 .cursor/hooks/kube_guard.py`）就是显式解释器。
+    Windows 上必须是 .cmd：Cursor 把 command 交给操作系统去启动，
+    登记 .py 时按文件关联用编辑器打开（每次弹出 gate-guard.py 就是这个）。
+    POSIX 上登记显式解释器调用，不依赖 shebang。
     """
     if os.name == "nt":
-        # Cursor 是否用 shell 起钩子没有文档保证，套一层 cmd /c 两种情况都能跑
-        return f"cmd /c {hook_python()} {script}"
+        stem = Path(script).stem
+        return f".cursor/hooks/{stem}.cmd"
     return f"{hook_python()} {script}"
 
 
@@ -422,7 +453,7 @@ def merge_hooks(existing: dict) -> tuple[dict, int]:
     out["version"] = out.get("version", 1)
     events = dict(out.get("hooks") or {})
     ours_all = our_hooks()
-    mine = (*OUR_SCRIPTS, *LEGACY_SCRIPTS)
+    mine = (*OUR_SCRIPTS, *OUR_LAUNCHERS, *LEGACY_SCRIPTS)
     kept = 0
     for event, ours in ours_all.items():
         foreign = [h for h in (events.get(event) or [])
@@ -451,6 +482,21 @@ def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
         else:
             _write(dst, content)
             dst.chmod(0o755)   # POSIX 上直接跑脚本时用得上；Windows 上靠显式解释器
+            print(f"  写入 {dst.relative_to(cfg.root)}")
+        written += 1
+
+    # Windows 启动器：hooks.json 登记的是 .cmd，不是 .py。两边都写，
+    # 免得 Mac 上装完的仓库拿到 Windows 上还得再装一次才有启动器
+    launcher = (TEMPLATES / "hooks" / "hook-launch.cmd").read_text(encoding="utf-8")
+    for name in OUR_LAUNCHERS:
+        dst = hooks_dir / name
+        if dst.exists() and not args.force:
+            print(f"  跳过已存在的 {dst.relative_to(cfg.root)}（要覆盖加 --force）")
+            continue
+        if args.dry_run:
+            print(f"  [演练] 将写入 {dst.relative_to(cfg.root)}")
+        else:
+            _write(dst, launcher)
             print(f"  写入 {dst.relative_to(cfg.root)}")
         written += 1
 

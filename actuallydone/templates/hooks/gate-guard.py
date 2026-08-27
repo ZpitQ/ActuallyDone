@@ -86,7 +86,10 @@ def out(obj: dict, root: str | None = None, msg: str = "") -> int:
 
 def main() -> int:
     try:
-        payload = json.loads(sys.stdin.read() or "{}")
+        raw = sys.stdin.read()
+        if raw.startswith("\ufeff"):   # Windows 上 Cursor 喂的 JSON 有时带 BOM
+            raw = raw[1:]
+        payload = json.loads(raw or "{}")
     except Exception:
         payload = {}
 

@@ -19,7 +19,7 @@ adone health        # 六个维度的项目健康度，汇成一页可离线打�
 所以复核这件事不必由写代码的那个模型来做——见[对抗检查](#对抗检查换一个模型来核)。
 
 零第三方依赖，只用 Python 标准库（需要 3.11+，因为用了 `tomllib`）。
-当前版本 **v1.3.3**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.4**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -204,7 +204,8 @@ python3 bin/adone --version
 
 ## Windows
 
-v1.3.2 / v1.3.3 修掉了 Windows 上三处「静默什么都没发生」的坑。装法和别处一样（`pipx install …`），
+v1.3.2 起修 Windows 上「静默什么都没发生」的坑；v1.3.4 修的是钩子弹出 `.py` 文件。
+装法和别处一样（`pipx install …`），
 `adone` 会落在 `%USERPROFILE%\.local\bin`——**这个目录不在 PATH 里就先加进去**，
 否则 `adone` 敲不出来，钩子也找不到它。
 
@@ -224,17 +225,22 @@ adone --version
 
 ### 钩子
 
-`adone install --with-hooks` 在 Windows 上写的是 Python 钩子，注册成显式解释器调用
-（`cmd /c py -3 .cursor\hooks\gate-guard.py`），不依赖 shebang 和可执行位——
-那两样是 POSIX 才有的东西，Windows 上 Cursor 起不动，钩子会**静默不触发**：
-Agent 改完代码没人提醒，而这正是本工具存在的理由。
+`adone install --with-hooks` 在 Windows 上登记的是 `.cmd` 启动器
+（`.cursor/hooks/gate-guard.cmd`），不是 `.py`。
 
-装完跑一次 `adone doctor`。它会真的去解析钩子命令里的解释器，找不到就报出来。
-1.3.2 之前它查的是可执行位（`os.access(X_OK)`），而那在 Windows 上对任何文件恒为真，
-于是「钩子已装」和「钩子从没被触发过」在体检里长得一模一样。
+Cursor 把 `hooks.json` 的 `command` 交给操作系统去启动。登记 `.py` 时，
+Windows 按文件关联用默认应用打开它——Cursor 自己就是 `.py` 的默认应用，
+于是**每次弹出 `gate-guard.py`，脚本一行都没跑**，Agent 改完代码没人提醒。
+这就是「钩子提示已安装，但改文件不重跑门禁」的样子。
 
-从 1.3.2 之前的版本升上来，务必重渲一次钩子——旧的 `mark-dirty.sh` 是 bash 脚本，
-Windows 上没有 bash 也没有 jq：
+`.cmd` 才是 Windows 认的可执行文件：启动器找到 `py` / `python` 再去跑旁边的 `.py`。
+POSIX 上仍然登记 `python3 .cursor/hooks/gate-guard.py`。
+
+装完跑一次 `adone doctor`。它会认「登记的是 .py」这件事，并点名要重渲。
+1.3.2 之前它查的是可执行位（`os.access(X_OK)`），那在 Windows 上恒为真；
+1.3.3 改成了 `cmd /c py -3 …py`，命令里仍有 `.py`，文件照样被打开。
+
+升上来务必重渲一次钩子：
 
 ```powershell
 adone upgrade
@@ -242,15 +248,24 @@ adone install --hooks-only --force
 adone doctor
 ```
 
+重渲之后打开 `.cursor\hooks.json`，`stop` 的 `command` 必须是
+`.cursor/hooks/gate-guard.cmd`，**不能再出现 `.py`**。然后改一个受监视的源文件、
+让 Agent 收工：应该被推回来重跑 `adone gate run`，**不应该再弹出 `gate-guard.py`**。
+
 钩子有没有真被触发过，看 `.adone\hook.log`：一个空的 `.adone\dirty` 和一个
 从没被改过的仓库长得一样，这个日志是唯一能区分两者的地方。
 
 ### 已知的坑
 
-- Cursor 官方文档没有规定 Windows 上钩子命令怎么执行（社区与官方论坛的建议是加
-  `cmd /c`，adone 照此生成）。钩子没反应时先看 Cursor 的 **Hooks 输出通道**。
+- Cursor 官方文档没有规定 Windows 上钩子命令怎么执行。官方示例的形态是
+  **相对路径指向一个可执行脚本**（POSIX 上是 `.sh`，Windows 上对应 `.cmd`）。
+  钩子没反应时先看 Cursor 的 **Hooks 输出通道**，再看 `.adone\hook.log`。
 - `py` 启动器（python.org 安装器自带）比 `python` 可靠：微软商店的 `python` 别名会
-  打开应用商店而不是跑脚本。adone 装钩子时优先用 `py -3`。
+  打开应用商店而不是跑脚本。`.cmd` 启动器会跳过 `WindowsApps` 里的那个别名。
+- 工作区必须开在放 `adone.toml` 的那一层（或它的子目录）。如果只把子模块
+  （例如 `A\B`）当成工作区打开，而 `adone.toml` 在 `A`，Cursor 的
+  `CURSOR_PROJECT_DIR` 是 `A\B`——`adone` 会往上找到配置，但钩子进程的
+  工作目录是子模块。出问题先确认是在仓库根目录打开的。
 - Java 的覆盖率步骤要写成 `mvn -B -ntp jacoco:prepare-agent test jacoco:report`，
   见[下面这一节](#java-的覆盖率读不到)。这跟操作系统无关，但 Java 团队踩得最多。
 

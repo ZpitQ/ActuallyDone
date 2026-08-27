@@ -53,7 +53,10 @@ def watched(rel: str) -> bool:
 def main() -> int:
     root = os.environ.get("CURSOR_PROJECT_DIR") or os.getcwd()
     try:
-        payload = json.loads(sys.stdin.read() or "{}")
+        raw = sys.stdin.read()
+        if raw.startswith("\ufeff"):   # Windows 上 Cursor 喂的 JSON 有时带 BOM
+            raw = raw[1:]
+        payload = json.loads(raw or "{}")
     except (ValueError, OSError) as e:
         log(root, f"读不动 payload（{type(e).__name__}），改动没记下")
         print("{}")

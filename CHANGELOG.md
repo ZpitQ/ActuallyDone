@@ -2,6 +2,26 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.4 — 2026-08-27
+
+Windows 上钩子「已安装」但每次弹出 `gate-guard.py`、改完代码不重跑门禁。
+
+### 修
+
+- **登记 `.py` 等于打开文件**：Cursor 把 `hooks.json` 的 `command` 交给操作系统
+  去启动。`.py` 的默认关联是编辑器（常常就是 Cursor 自己），于是 stop 钩子一触发
+  就弹出 `gate-guard.py`，脚本一行都没跑——回执过期检查从未发生，Agent 改完
+  代码没人提醒。v1.3.3 的 `cmd /c py -3 …py` 命令里仍有 `.py`，一样会被打开。
+  现在 Windows 上登记的是 `.cursor/hooks/gate-guard.cmd` / `mark-dirty.cmd`：
+  `.cmd` 才是 Windows 认的可执行文件，启动器找到解释器再跑旁边的 `.py`。
+- **`adone doctor` 认这件事**：hooks.json 里还登记着 `.py` 时，点名「会打开文件
+  而不是执行」，而不是报「钩子：已装」。
+- **stdin 带 BOM**：Windows 上 Cursor 喂给钩子的 JSON 有时带 UTF-8 BOM，
+  不剥掉就解析失败，改动记不下来。两个钩子都剥。
+
+从 v1.3.3 升上来也必须 `adone install --hooks-only --force`。重渲后
+`hooks.json` 的 `command` 里不能再出现 `.py`。
+
 ## v1.3.3 — 2026-08-27
 
 Java 团队在 Windows 上反馈的两件事。它们是同一类病，和 v1.3.2 修的 `mvn` 一样：

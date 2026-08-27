@@ -197,6 +197,17 @@ class TestMarkDirty(ProjectCase):
         log = (self.root / ".adone" / "hook.log").read_text(encoding="utf-8")
         self.assertIn("读不动 payload", log)
 
+    def test_带BOM的payload也能记下(self):
+        """Windows 上 Cursor 喂给钩子的 JSON 有时带 UTF-8 BOM，不剥掉就解析失败。"""
+        self.make_go_project()
+        hook = self.render(gate={"watch_roots": ["."], "watch_exts": [".go"]})
+        env = dict(os.environ, CURSOR_PROJECT_DIR=str(self.root))
+        payload = "\ufeff" + json.dumps({"file_path": str(self.root / "internal/calc.go")})
+        proc = subprocess.run([sys.executable, str(hook)], input=payload,
+                              capture_output=True, text=True, env=env, cwd=self.root)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("internal/calc.go", self.dirty())
+
 
 class TestHooksJson(ProjectCase):
     def test_合并而不是冲掉别人的钩子(self):
@@ -210,7 +221,7 @@ class TestHooksJson(ProjectCase):
         self.assertEqual(merged["hooks"]["beforeShellExecution"], [{"command": "./my-guard.sh"}])
         cmds = [h["command"] for h in merged["hooks"]["stop"]]
         self.assertEqual(cmds[0], "./my-stop.sh")
-        self.assertIn(".cursor/hooks/gate-guard.py", cmds[1])
+        self.assertIn("gate-guard", cmds[1])
 
     def test_重装不会把自己的条目叠成两份(self):
         once, _ = install.merge_hooks({})
@@ -218,14 +229,18 @@ class TestHooksJson(ProjectCase):
         self.assertEqual(twice, once)
         self.assertEqual(kept, 0)
 
-    def test_注册的是显式解释器调用而不是裸脚本路径(self):
-        """靠 shebang 加可执行位启动是 POSIX 才成立的约定：Windows 上 Cursor
-        起不动 .py，钩子静默不触发，Agent 改完代码没人提醒。"""
+    def test_登记的命令在本机是可执行的而不是打开文件(self):
+        """Windows 上登记 .py 会被当成打开文件（每次弹出 gate-guard.py）。
+        POSIX 上登记显式解释器，不靠 shebang。"""
         merged, _ = install.merge_hooks({})
         for event in ("afterFileEdit", "stop"):
             cmd = merged["hooks"][event][0]["command"]
-            self.assertNotEqual(cmd.split()[0][-3:], ".py", cmd)
             self.assertIn(".cursor/hooks/", cmd)
+            if os.name == "nt":
+                self.assertTrue(cmd.endswith(".cmd"), cmd)
+                self.assertNotIn(".py", cmd)
+            else:
+                self.assertNotEqual(cmd.split()[0][-3:], ".py", cmd)
 
     def test_旧版bash钩子会被摘掉(self):
         old = {"version": 1, "hooks": {
@@ -234,7 +249,35 @@ class TestHooksJson(ProjectCase):
         self.assertEqual(kept, 0)
         blob = json.dumps(merged, ensure_ascii=False)
         self.assertNotIn("mark-dirty.sh", blob)
-        self.assertIn("mark-dirty.py", blob)
+        self.assertTrue("mark-dirty.py" in blob or "mark-dirty.cmd" in blob)
+
+    def test_Windows下登记py等于打开文件(self):
+        """Java 团队的「每次弹出 gate-guard.py」就是这个：command 里是 .py，
+        Windows 按文件关联用 Cursor 打开它，脚本一行都没跑。"""
+        self.assertTrue(install.windows_opens_hook_as_file(
+            ".cursor/hooks/gate-guard.py"))
+        self.assertTrue(install.windows_opens_hook_as_file(
+            "cmd /c py -3 .cursor/hooks/gate-guard.py"))
+        self.assertTrue(install.windows_opens_hook_as_file(
+            "python3 .cursor/hooks/mark-dirty.py"))
+        self.assertFalse(install.windows_opens_hook_as_file(
+            ".cursor/hooks/gate-guard.cmd"))
+        self.assertFalse(install.windows_opens_hook_as_file(
+            "python3 ./somebody-else.py"))
+
+    def test_会摘掉把py当命令的旧登记(self):
+        old = {"version": 1, "hooks": {
+            "stop": [{"command": "cmd /c py -3 .cursor/hooks/gate-guard.py",
+                      "timeout": 120}]}}
+        merged, kept = install.merge_hooks(old)
+        self.assertEqual(kept, 0)
+        cmd = merged["hooks"]["stop"][0]["command"]
+        if os.name == "nt":
+            self.assertTrue(cmd.endswith(".cmd"), cmd)
+            self.assertFalse(install.windows_opens_hook_as_file(cmd))
+        else:
+            self.assertTrue(cmd.startswith("python3 "), cmd)
+            self.assertIn("gate-guard.py", cmd)
 
 
 class TestInstallFailsLoud(ProjectCase):
@@ -313,6 +356,15 @@ class TestDoctorChecksHooks(ProjectCase):
         hooks_json.write_text(json.dumps(data), encoding="utf-8")
         _, problems = install.hooks_report(cfg)
         self.assertTrue(any("旧版 mark-dirty.sh" in p for p in problems), problems)
+
+    def test_会写出Windows启动器(self):
+        self.make_go_project()
+        self.install_hooks()
+        for name in ("mark-dirty.cmd", "gate-guard.cmd"):
+            p = self.root / ".cursor" / "hooks" / name
+            self.assertTrue(p.is_file(), name)
+            text = p.read_text(encoding="utf-8")
+            self.assertIn("%~dpn0.py", text)
 
     def test_配置改了钩子没重渲要报出来(self):
         self.make_go_project()
