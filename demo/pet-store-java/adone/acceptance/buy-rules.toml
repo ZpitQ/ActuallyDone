@@ -1,0 +1,11 @@
+task = "售出宠物"
+
+[[item]]
+"要求" = "购买后状态变为已售出"
+test = "PetStoreTest#buyMarksPetSold"
+impl = "src/main/java/com/example/petstore/PetStore.java:44"
+
+[[item]]
+"要求" = "已售出的宠物不能再买"
+test = "PetStoreTest#buySoldPetIsRejected"
+impl = "src/main/java/com/example/petstore/PetStore.java:46"

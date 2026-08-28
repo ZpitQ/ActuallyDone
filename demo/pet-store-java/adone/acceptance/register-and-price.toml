@@ -1,0 +1,16 @@
+task = "登记宠物时校验名称、物种与价格"
+
+[[item]]
+"要求" = "空名称必须被拒绝"
+test = "PetStoreTest#rejectsBlankName"
+impl = "src/main/java/com/example/petstore/PetStore.java:30"
+
+[[item]]
+"要求" = "未知物种必须被拒绝"
+test = "PetStoreTest#rejectsUnknownSpecies"
+impl = "src/main/java/com/example/petstore/PetStore.java:33"
+
+[[item]]
+"要求" = "负数价格必须被拒绝"
+test = "PetStoreTest#rejectsNegativePrice"
+impl = "src/main/java/com/example/petstore/PetStore.java:36"

@@ -2,8 +2,10 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## 未发布
+## v1.3.9 — 2026-08-28
 
+- **Java 演示项目**：`demo/pet-store-java`（Spring Boot + Maven 内存宠物店），
+  已接入钩子并跑通一次 `gate run`。
 - **Linux**：`--open` 用 `xdg-open`（macOS 仍用 `open`，Windows 改 `os.startfile`）。
   钩子换解释器时会去 `~/.local/bin`、`~/.pyenv/shims`、`/usr/bin` 找 3.11+。
 - README 按「内涵 → 架构 → 安装 → 上手 → 门禁 → 基线 → 审计 → 健康报告 → Q&A」重排。

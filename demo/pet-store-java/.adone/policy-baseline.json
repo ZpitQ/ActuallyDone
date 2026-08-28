@@ -1,0 +1,50 @@
+{
+  "created_at": "2026-08-28T09:53:19",
+  "reason": "首次建立（由 gate run 自动记账）",
+  "hash": "1747e2fbe18f6310aa45dda70a0ec74fa3c2cc324483a79fa2c10bfe7757715f",
+  "snapshot": {
+    "watch_roots": [
+      "src"
+    ],
+    "watch_exts": [
+      ".groovy",
+      ".java",
+      ".kt"
+    ],
+    "min_tree_files": 1,
+    "steps": [
+      {
+        "name": "mvn test",
+        "kind": "test",
+        "adapter": "java",
+        "cwd": ".",
+        "argv": [
+          "mvn",
+          "-B",
+          "-ntp",
+          "jacoco:prepare-agent",
+          "test",
+          "jacoco:report"
+        ],
+        "invalid_marks": [],
+        "script": null
+      }
+    ],
+    "coverage_threshold": null,
+    "coverage_source": "mvn test",
+    "tests_adapter": "java",
+    "tests_roots": [
+      "."
+    ],
+    "baseline_exempt": [],
+    "checks": {
+      "consistency.pair": 0,
+      "docs.required": 1,
+      "docs.excerpt": 0,
+      "docs.claim": 0,
+      "code.unused": 0,
+      "probe": 0
+    },
+    "contracts": {}
+  }
+}

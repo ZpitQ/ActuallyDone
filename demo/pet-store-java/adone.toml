@@ -1,0 +1,97 @@
+# ActuallyDone 配置。带「请确认」的项是探测猜的，请逐条核对。
+# 阈值一律没有默认值——工具不替你决定质量标准。
+
+version = 1
+
+[project]
+name = "pet-store-java"
+ecosystems = ["java"]    # 请确认：探测所得
+state_dir = ".adone"       # 机器写的：回执、覆盖率 profile、报告
+material_dir = "adone"     # 人写的：验收契约、需求台账
+skills_dir = ".cursor/skills"
+
+[gate]
+# 受监视代码树：回执的树哈希由这些文件的内容算出。改了这里面任何文件，回执即过期。
+watch_roots = ["src"]    # 请确认：探测所得
+watch_exts = [".groovy", ".java", ".kt"]
+# 扫到的文件数低于这个值就直接报错：空哈希会让门禁恒等通过。
+# 首次跑 adone gate hash 看看实际数字，填一个略低于它的值。
+min_tree_files = 8         # 首次 gate run 扫到 10 个文件，略低于实测
+keep_receipts = 20
+
+# 门禁步骤：按顺序执行，任何一步不过，回执就不是绿的。
+# kind = "test" 的步骤会用 adapter 解析输出；kind = "fmt" 的步骤有输出即失败
+# （格式化工具往往永远退出 0）。{cover_out} 会被替换成 <state_dir>/cover.out。
+[[gate.step]]
+name = "mvn test"
+cwd = "."
+argv = ["mvn", "-B", "-ntp", "jacoco:prepare-agent", "test", "jacoco:report"]
+kind = "test"
+adapter = "java"
+# 输出里出现这些串就判本轮证据无效（例如整批用例因为连不上数据库被跳过）
+invalid_marks = []
+
+[coverage]
+# 首次 gate run 实测 97.0%，下限取当前水位附近，不是许愿。
+threshold = 90.0
+source = "mvn test"
+
+[tests]
+adapter = "java"    # 请确认：探测所得
+roots = ["."]
+# 声明了覆盖率下限的文档，纳入假绿检测（防止有人偷偷把文档里的标准调低）
+threshold_docs = []
+
+[code]
+big_file_lines = 800
+big_file_globs = ["src/**/*.groovy", "src/**/*.java"]
+mark_globs = ["src/**/*.groovy"]
+mark_words = ["TODO", "FIXME", "XXX", "HACK"]
+dup_min_lines = 8
+dup_roots = ["src"]
+zero_cover_ratio = 0.15
+
+# 定义了却没人引用的符号。用「定义正则 + 使用正则」表达，与语言无关：
+# [[code.unused]]
+# name = "未注册 handler"
+# glob = "internal/api/*.go"
+# define = "^func \\(h \\*Handler\\) ([a-z]\\w*)\\("
+# use = "h\\.([a-z]\\w*)\\b"
+
+# 两份都自称权威全量的文件，必须完全一致（例如程序内迁移与绿地建库脚本）：
+# [[consistency.pair]]
+# a = "internal/migrate/migrate.go"
+# b = "deploy/schema.sql"
+# extract = "sql_tables"
+
+[docs]
+required = ["README.md"]    # 请确认：探测所得
+diagram_globs = []          # 例如 ["docs/diagrams/*.mmd"]，会检查渲染图是否比源文件旧
+diagram_render_ext = ".svg"
+adr_dir = ""                # 决策记录目录，供 adr: 锚点核验
+hooks_file = ""
+
+# 文档是选摘：只查「文档里写了、代码里没有」的幻影，不要求反向全覆盖
+# [[docs.excerpt]]
+# file = "docs/schema.sql"
+# extract = "sql_tables"
+# against = "internal/migrate/migrate.go"
+
+# 文档里写死的数字与现实对账
+# [[docs.claim]]
+# file = "docs/schema.sql"
+# pattern = "全量 DDL（(\\d+) 张表）"
+# actual = "count:sql_tables:internal/migrate/migrate.go"
+
+[requirements]
+source = ""                 # 需求源文档（markdown 标题 + 列表），供 requirements init 解析
+tables_from = ""            # table: 锚点的事实来源
+routes_from = ""            # route: 锚点的事实来源（源码目录）
+views_from = ""             # view: 锚点的事实来源（前端源码目录）
+
+# 业务不变量探针：跑起来的系统里，那条业务规则还成立吗。默认不跑。
+# [[probe]]
+# name = "下单不会超卖"
+# argv = ["python3", "scripts/probe_oversell.py"]
+# pass_pattern = "PASS"
+# fail_pattern = "FAIL"

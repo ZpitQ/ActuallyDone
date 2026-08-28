@@ -1,6 +1,6 @@
 # ActuallyDone
 
-当前版本 **v1.3.8**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.9**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
