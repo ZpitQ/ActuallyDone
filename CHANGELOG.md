@@ -2,6 +2,11 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.10 — 2026-08-28
+
+- **Java 演示**：`demo/pet-store-java` 门禁按本机核数并行跑 JUnit 5（`dynamic` × factor=2），
+  开关锁在 `argv` / 判据基线里。控制器用例改成可并行（`@WebMvcTest`，不写死 id / 空列表）。
+
 ## v1.3.9 — 2026-08-28
 
 - **Java 演示项目**：`demo/pet-store-java`（Spring Boot + Maven 内存宠物店），

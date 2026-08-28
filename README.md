@@ -1,6 +1,6 @@
 # ActuallyDone
 
-当前版本 **v1.3.9**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.10**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
@@ -216,6 +216,27 @@ kind = "test"
 adapter = "java"
 argv = ["mvn", "-B", "-ntp", "jacoco:prepare-agent", "test", "jacoco:report"]
 ```
+
+要按本机核数并行跑 JUnit 5，把开关写进同一步的 `argv`（判据基线锁的是命令，不是 pom）：
+
+```toml
+argv = [
+  "mvn", "-B", "-ntp",
+  "-Djunit.jupiter.execution.parallel.enabled=true",
+  "-Djunit.jupiter.execution.parallel.mode.default=concurrent",
+  "-Djunit.jupiter.execution.parallel.mode.classes.default=concurrent",
+  "-Djunit.jupiter.execution.parallel.config.strategy=dynamic",
+  "-Djunit.jupiter.execution.parallel.config.dynamic.factor=2",
+  "jacoco:prepare-agent", "test", "jacoco:report",
+]
+```
+
+`dynamic` 的线程数 = 本机核数 × `factor`（演示里 factor=2）。Spring 用例不要
+`@DirtiesContext` 逐条重启上下文，也不要写死 id=1 / 空列表，否则只能串行。
+pom 里用 `systemPropertyVariables` 把这些 `-D` 转进测试 JVM；不要用 Surefire
+的 `-Dparallel`（只认 JUnit 4），也不要用 `-DargLine` 塞属性（会盖掉
+`jacoco:prepare-agent`）。改完 `argv` 后 `adone policy --accept "理由"`。
+演示见 `demo/pet-store-java`。
 
 多模块项目的覆盖率按各模块行数相加；有 `jacoco-aggregate` 时只认聚合报告。
 配置里写 `mvn` / `./mvnw` 即可，Windows 上会自动对上 `mvn.cmd` / `mvnw.cmd`。

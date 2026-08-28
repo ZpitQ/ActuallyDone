@@ -25,7 +25,19 @@ keep_receipts = 20
 [[gate.step]]
 name = "mvn test"
 cwd = "."
-argv = ["mvn", "-B", "-ntp", "jacoco:prepare-agent", "test", "jacoco:report"]
+# JUnit 5 dynamic：线程数 = 本机核数 × factor（12 核 × 2 = 24）。
+# 类、方法都 concurrent。Spring 用例已做成互不依赖 id/空列表，才能真并行。
+# 改这些 -D 必须 adone policy --accept。不要用 Surefire -Dparallel（只认 JUnit 4），
+# 也不要用 -DargLine（会盖掉 jacoco:prepare-agent）。
+argv = [
+  "mvn", "-B", "-ntp",
+  "-Djunit.jupiter.execution.parallel.enabled=true",
+  "-Djunit.jupiter.execution.parallel.mode.default=concurrent",
+  "-Djunit.jupiter.execution.parallel.mode.classes.default=concurrent",
+  "-Djunit.jupiter.execution.parallel.config.strategy=dynamic",
+  "-Djunit.jupiter.execution.parallel.config.dynamic.factor=2",
+  "jacoco:prepare-agent", "test", "jacoco:report",
+]
 kind = "test"
 adapter = "java"
 # 输出里出现这些串就判本轮证据无效（例如整批用例因为连不上数据库被跳过）

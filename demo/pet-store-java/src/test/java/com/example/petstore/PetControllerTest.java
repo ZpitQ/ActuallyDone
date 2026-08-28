@@ -5,40 +5,54 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
-import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
-@SpringBootTest
-@AutoConfigureMockMvc
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
+@WebMvcTest(PetController.class)
+@Import({PetStore.class, ApiExceptionHandler.class})
+@Execution(ExecutionMode.CONCURRENT)
 class PetControllerTest {
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     @Autowired
     private MockMvc mvc;
 
     @Test
-    void listStartsEmpty() throws Exception {
+    void listIncludesCreatedPet() throws Exception {
+        String name = "Listed-" + UUID.randomUUID();
+        mvc.perform(post("/pets")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(petJson(name, "cat", "12.5")))
+                .andExpect(status().isOk());
+
         mvc.perform(get("/pets"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(0));
+                .andExpect(jsonPath("$[?(@.name == '" + name + "')]").exists());
     }
 
     @Test
     void createThenGetPet() throws Exception {
-        mvc.perform(post("/pets")
+        MvcResult created = mvc.perform(post("/pets")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Mochi\",\"species\":\"cat\",\"price\":12.5}"))
+                        .content(petJson("Mochi-" + UUID.randomUUID(), "cat", "12.5")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value(1))
-                .andExpect(jsonPath("$.name").value("Mochi"))
-                .andExpect(jsonPath("$.status").value("AVAILABLE"));
+                .andExpect(jsonPath("$.id").isNumber())
+                .andExpect(jsonPath("$.status").value("AVAILABLE"))
+                .andReturn();
+        long id = idOf(created);
 
-        mvc.perform(get("/pets/1"))
+        mvc.perform(get("/pets/" + id))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.species").value("cat"));
     }
@@ -47,25 +61,27 @@ class PetControllerTest {
     void createRejectsNegativePrice() throws Exception {
         mvc.perform(post("/pets")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Nemo\",\"species\":\"fish\",\"price\":-1}"))
+                        .content(petJson("Nemo-" + UUID.randomUUID(), "fish", "-1")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("price must not be negative"));
     }
 
     @Test
     void buyThenRejectSecondBuy() throws Exception {
-        mvc.perform(post("/pets")
+        MvcResult created = mvc.perform(post("/pets")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Kiwi\",\"species\":\"bird\",\"price\":20}"))
-                .andExpect(status().isOk());
+                        .content(petJson("Kiwi-" + UUID.randomUUID(), "bird", "20")))
+                .andExpect(status().isOk())
+                .andReturn();
+        long id = idOf(created);
 
-        mvc.perform(post("/pets/1/buy"))
+        mvc.perform(post("/pets/" + id + "/buy"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("SOLD"));
 
-        mvc.perform(post("/pets/1/buy"))
+        mvc.perform(post("/pets/" + id + "/buy"))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error").value("pet already sold: 1"));
+                .andExpect(jsonPath("$.error").value("pet already sold: " + id));
     }
 
     @Test
@@ -73,5 +89,14 @@ class PetControllerTest {
         mvc.perform(get("/pets/99"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("pet not found: 99"));
+    }
+
+    private static String petJson(String name, String species, String price) {
+        return "{\"name\":\"" + name + "\",\"species\":\"" + species + "\",\"price\":" + price + "}";
+    }
+
+    private static long idOf(MvcResult result) throws Exception {
+        JsonNode body = JSON.readTree(result.getResponse().getContentAsString());
+        return body.get("id").asLong();
     }
 }

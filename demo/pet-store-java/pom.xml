@@ -19,6 +19,12 @@
 
   <properties>
     <java.version>17</java.version>
+    <!-- JUnit 5 按本机核数并行。门禁 argv 用同名 -D 锁进 .adone/policy-baseline.json -->
+    <junit.jupiter.execution.parallel.enabled>true</junit.jupiter.execution.parallel.enabled>
+    <junit.jupiter.execution.parallel.mode.default>concurrent</junit.jupiter.execution.parallel.mode.default>
+    <junit.jupiter.execution.parallel.mode.classes.default>concurrent</junit.jupiter.execution.parallel.mode.classes.default>
+    <junit.jupiter.execution.parallel.config.strategy>dynamic</junit.jupiter.execution.parallel.config.strategy>
+    <junit.jupiter.execution.parallel.config.dynamic.factor>2</junit.jupiter.execution.parallel.config.dynamic.factor>
   </properties>
 
   <dependencies>
@@ -38,6 +44,20 @@
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+      <!-- 把上面的 Maven 属性转进测试 JVM；Surefire 自己的 parallel 只认 JUnit 4 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <systemPropertyVariables>
+            <junit.jupiter.execution.parallel.enabled>${junit.jupiter.execution.parallel.enabled}</junit.jupiter.execution.parallel.enabled>
+            <junit.jupiter.execution.parallel.mode.default>${junit.jupiter.execution.parallel.mode.default}</junit.jupiter.execution.parallel.mode.default>
+            <junit.jupiter.execution.parallel.mode.classes.default>${junit.jupiter.execution.parallel.mode.classes.default}</junit.jupiter.execution.parallel.mode.classes.default>
+            <junit.jupiter.execution.parallel.config.strategy>${junit.jupiter.execution.parallel.config.strategy}</junit.jupiter.execution.parallel.config.strategy>
+            <junit.jupiter.execution.parallel.config.dynamic.factor>${junit.jupiter.execution.parallel.config.dynamic.factor}</junit.jupiter.execution.parallel.config.dynamic.factor>
+          </systemPropertyVariables>
+        </configuration>
       </plugin>
       <!-- 只声明插件，不绑生命周期。门禁 CLI 会显式跑 prepare-agent + test + report -->
       <plugin>

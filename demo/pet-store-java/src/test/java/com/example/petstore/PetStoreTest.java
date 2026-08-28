@@ -5,8 +5,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 
+@Execution(ExecutionMode.CONCURRENT)
 class PetStoreTest {
 
     @Test
@@ -71,5 +78,41 @@ class PetStoreTest {
         PetStore store = new PetStore();
         PetStoreException e = assertThrows(PetStoreException.class, () -> store.get(99));
         assertEquals(404, e.getStatus());
+    }
+
+    private static final Set<String> WORKERS = ConcurrentHashMap.newKeySet();
+    private static final CountDownLatch BOTH = new CountDownLatch(4);
+
+    @Test
+    void parallelWorkerA() throws InterruptedException {
+        rendezvous();
+        assertTrue(WORKERS.size() >= 4);
+    }
+
+    @Test
+    void parallelWorkerB() throws InterruptedException {
+        rendezvous();
+        assertTrue(WORKERS.size() >= 4);
+    }
+
+    @Test
+    void parallelWorkerC() throws InterruptedException {
+        rendezvous();
+        assertTrue(WORKERS.size() >= 4);
+    }
+
+    @Test
+    void parallelWorkerD() throws InterruptedException {
+        rendezvous();
+        assertTrue(WORKERS.size() >= 4);
+    }
+
+    private static void rendezvous() throws InterruptedException {
+        WORKERS.add(Thread.currentThread().getName());
+        BOTH.countDown();
+        assertTrue(BOTH.await(5, TimeUnit.SECONDS),
+                "四条 UT 没能同时跑起来：JUnit 并行没生效，或线程池太小");
+        assertTrue(WORKERS.size() >= 4,
+                "工作线程不足 4 个 " + WORKERS + "，并发没有加大");
     }
 }

@@ -1,0 +1,26 @@
+{
+  "created_at": "2026-08-28T15:29:23",
+  "reason": "控制器用例改为可并行，探测线程从 2 提到 4",
+  "coverage_threshold": 90.0,
+  "runtime_skips": 0,
+  "test_functions": {
+    "listIncludesCreatedPet": "src/test/java/com/example/petstore/PetControllerTest.java",
+    "createThenGetPet": "src/test/java/com/example/petstore/PetControllerTest.java",
+    "createRejectsNegativePrice": "src/test/java/com/example/petstore/PetControllerTest.java",
+    "buyThenRejectSecondBuy": "src/test/java/com/example/petstore/PetControllerTest.java",
+    "getMissingPet": "src/test/java/com/example/petstore/PetControllerTest.java",
+    "registerKeepsAvailablePet": "src/test/java/com/example/petstore/PetStoreTest.java",
+    "rejectsBlankName": "src/test/java/com/example/petstore/PetStoreTest.java",
+    "rejectsUnknownSpecies": "src/test/java/com/example/petstore/PetStoreTest.java",
+    "rejectsNegativePrice": "src/test/java/com/example/petstore/PetStoreTest.java",
+    "buyMarksPetSold": "src/test/java/com/example/petstore/PetStoreTest.java",
+    "buySoldPetIsRejected": "src/test/java/com/example/petstore/PetStoreTest.java",
+    "missingPetIsNotFound": "src/test/java/com/example/petstore/PetStoreTest.java",
+    "parallelWorkerA": "src/test/java/com/example/petstore/PetStoreTest.java",
+    "parallelWorkerB": "src/test/java/com/example/petstore/PetStoreTest.java",
+    "parallelWorkerC": "src/test/java/com/example/petstore/PetStoreTest.java",
+    "parallelWorkerD": "src/test/java/com/example/petstore/PetStoreTest.java"
+  },
+  "skip_sites": {},
+  "assertionless": []
+}

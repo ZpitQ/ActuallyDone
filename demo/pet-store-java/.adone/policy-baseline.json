@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-08-28T09:53:19",
-  "reason": "首次建立（由 gate run 自动记账）",
-  "hash": "1747e2fbe18f6310aa45dda70a0ec74fa3c2cc324483a79fa2c10bfe7757715f",
+  "created_at": "2026-08-28T15:29:23",
+  "reason": "加大 JUnit 并行：factor=2，类与方法都 concurrent",
+  "hash": "1eae428b6616d6e8b9ba1d168fcc45b066ba566f2c150f20b43e98b07d2e6655",
   "snapshot": {
     "watch_roots": [
       "src"
@@ -11,7 +11,7 @@
       ".java",
       ".kt"
     ],
-    "min_tree_files": 1,
+    "min_tree_files": 8,
     "steps": [
       {
         "name": "mvn test",
@@ -22,6 +22,11 @@
           "mvn",
           "-B",
           "-ntp",
+          "-Djunit.jupiter.execution.parallel.enabled=true",
+          "-Djunit.jupiter.execution.parallel.mode.default=concurrent",
+          "-Djunit.jupiter.execution.parallel.mode.classes.default=concurrent",
+          "-Djunit.jupiter.execution.parallel.config.strategy=dynamic",
+          "-Djunit.jupiter.execution.parallel.config.dynamic.factor=2",
           "jacoco:prepare-agent",
           "test",
           "jacoco:report"
@@ -30,7 +35,7 @@
         "script": null
       }
     ],
-    "coverage_threshold": null,
+    "coverage_threshold": 90.0,
     "coverage_source": "mvn test",
     "tests_adapter": "java",
     "tests_roots": [
@@ -45,6 +50,22 @@
       "code.unused": 0,
       "probe": 0
     },
-    "contracts": {}
+    "contracts": {
+      "adone/acceptance/buy-rules.toml": {
+        "items": 2,
+        "tests": [
+          "PetStoreTest#buyMarksPetSold",
+          "PetStoreTest#buySoldPetIsRejected"
+        ]
+      },
+      "adone/acceptance/register-and-price.toml": {
+        "items": 3,
+        "tests": [
+          "PetStoreTest#rejectsBlankName",
+          "PetStoreTest#rejectsUnknownSpecies",
+          "PetStoreTest#rejectsNegativePrice"
+        ]
+      }
+    }
   }
 }
