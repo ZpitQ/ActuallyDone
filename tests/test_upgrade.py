@@ -88,6 +88,16 @@ class TestInstallMode(ProjectCase):
                          encoding="utf-8")
         self.assertEqual(classify_entry(entry), "git")
 
+    def test_Windows的adone_exe也认成git(self):
+        bindir = self.root / "bin"
+        bindir.mkdir()
+        entry = bindir / "adone.exe"
+        (self.root / "actuallydone").mkdir()
+        (self.root / "actuallydone" / "__init__.py").write_text("", encoding="utf-8")
+        (self.root / ".git").mkdir()
+        entry.write_bytes(b"MZ")
+        self.assertEqual(classify_entry(entry), "git")
+
 
 class TestGitBlockers(ProjectCase):
     def test_脏工作树被拦住(self):

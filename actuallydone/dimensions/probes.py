@@ -13,7 +13,7 @@ import re
 import subprocess
 import time
 
-from ..gate import resolve_cmd
+from ..gate import launch_argv, resolve_cmd
 from ..model import DimResult, Metric
 
 DEFAULT_UNREACHABLE = ("Connection refused", "URLError", "Errno 61", "Max retries",
@@ -43,7 +43,7 @@ def run(ctx) -> DimResult:
             continue
         t0 = time.time()
         try:
-            proc = subprocess.run([exe, *argv[1:]], cwd=wd,
+            proc = subprocess.run(launch_argv(exe, argv[1:]), cwd=wd,
                                   capture_output=True, text=True, errors="replace",
                                   timeout=float(spec.get("timeout", 600)))
         except subprocess.TimeoutExpired:

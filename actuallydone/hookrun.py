@@ -2,7 +2,8 @@
 
 Windows 上 .cursor/hooks/*.py 会被当成「要打开的文件」：Cursor 自己就是 .py
 的默认应用，stop 一触发就弹出 gate-guard.py，脚本一行都没跑。
-钩子目录里只留 .cmd，逻辑全部在本模块。
+逻辑全部在本模块。Windows 登记 .exe（另写 .cmd 只给手跑）；
+macOS / Linux 登记 `python3 -m actuallydone hook …`，不写 .cmd。
 """
 
 from __future__ import annotations

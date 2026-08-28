@@ -378,6 +378,11 @@ class TestDoctorChecksHooks(ProjectCase):
     def test_会写出Windows启动器且不写py(self):
         self.make_go_project()
         self.install_hooks()
+        self.assertFalse((self.root / ".cursor" / "hooks" / "gate-guard.py").exists())
+        if os.name != "nt":
+            for name in ("mark-dirty.cmd", "gate-guard.cmd"):
+                self.assertFalse((self.root / ".cursor" / "hooks" / name).exists(), name)
+            return
         for name in ("mark-dirty.cmd", "gate-guard.cmd"):
             p = self.root / ".cursor" / "hooks" / name
             self.assertTrue(p.is_file(), name)
@@ -388,14 +393,28 @@ class TestDoctorChecksHooks(ProjectCase):
             self.assertIn("hook.log", text)
             self.assertNotIn("gate-guard.py", text)
             self.assertNotIn(b"\r\n", p.read_bytes(), "LF：Git Bash 的 heredoc 遇 CRLF 合不上")
-        self.assertFalse((self.root / ".cursor" / "hooks" / "gate-guard.py").exists())
+
+    def test_posix重渲会删掉误装的cmd(self):
+        if os.name == "nt":
+            self.skipTest("这条只覆盖 macOS/Linux 误装 .cmd")
+        self.make_go_project()
+        hooks = self.root / ".cursor" / "hooks"
+        hooks.mkdir(parents=True)
+        leftover = hooks / "gate-guard.cmd"
+        leftover.write_text("@echo off\n", encoding="utf-8")
+        self.install_hooks()
+        self.assertFalse(leftover.exists())
 
     def test_启动器在bash下也能写出hooklog(self):
         """Cursor 在 Windows 上可能用 Git Bash 起钩子。纯 cmd 文件第一行就死，
         所以 1.3.6 的 .adone 里没有 hook.log。"""
         self.make_go_project()
-        self.install_hooks()
         hook = self.root / ".cursor" / "hooks" / "mark-dirty.cmd"
+        hook.parent.mkdir(parents=True)
+        launcher = install.render(
+            (install.TEMPLATES / "hooks" / "hook-launch.cmd").read_text(encoding="utf-8"),
+            {"ADONE_CMD_WIN": ""})
+        install._write_lf(hook, launcher)
         env = dict(os.environ, CURSOR_PROJECT_DIR=str(self.root))
         proc = subprocess.run(["bash", str(hook)], input="{}",
                               capture_output=True, text=True, env=env, cwd=self.root)
@@ -407,6 +426,8 @@ class TestDoctorChecksHooks(ProjectCase):
             self.assertEqual(proc.stdout.strip(), "{}")
 
     def test_安装会复制exe启动器(self):
+        if os.name != "nt":
+            self.skipTest("exe 启动器只在 Windows 上复制")
         self.make_go_project()
         scripts = self.root / "pipx" / "venvs" / "actuallydone" / "Scripts"
         scripts.mkdir(parents=True)

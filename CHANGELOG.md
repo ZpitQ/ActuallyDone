@@ -2,6 +2,19 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.11 — 2026-08-28
+
+- **三系统适配**：init / install / gate / audit / upgrade / 钩子按本机环境分支。
+  - **macOS / Linux**：`install --hooks-only` 不再写出 `.cmd` / `.exe`（那是 Windows
+    启动器）；Cursor 跑 `hooks.json` 里的 `python3 -m actuallydone hook …`。
+    重渲时清掉以前误装的 `.cmd`。
+  - **Windows**：门禁 / 抽查 / 探针跑 `mvn.cmd` / `npm.cmd` 时经 `cmd /c` 启动，
+    不再把批处理直接交给 CreateProcess。
+  - **解释器自愈**：Windows 会去 `%LOCALAPPDATA%\Programs\Python` 和 `py.exe` 找
+    3.11+；升级识别 `adone.exe`。
+  - **审计开报告**：没有 `xdg-open` 的 Linux 退回系统浏览器；技能扫描在
+    Windows 上不再要求 chmod。
+
 ## v1.3.10 — 2026-08-28
 
 - **Java 演示**：`demo/pet-store-java` 门禁按本机核数并行跑 JUnit 5（`dynamic` × factor=2），

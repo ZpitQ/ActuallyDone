@@ -113,7 +113,9 @@ class GoAdapter(Adapter):
     def zero_cover(self, profile: Path, cwd: Path) -> tuple[int, int] | None:
         if not profile.exists():
             return None
-        proc = subprocess.run(["go", "tool", "cover", f"-func={profile}"],
+        from ..gate import launch_argv, resolve_cmd
+        exe = resolve_cmd("go", cwd) or "go"
+        proc = subprocess.run(launch_argv(exe, ["tool", "cover", f"-func={str(profile)}"]),
                               cwd=cwd, capture_output=True, text=True)
         if proc.returncode != 0:
             return None

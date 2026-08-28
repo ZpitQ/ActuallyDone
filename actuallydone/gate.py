@@ -79,6 +79,20 @@ def pathext() -> tuple[str, ...]:
     return tuple(e.lower() for e in raw.split(os.pathsep) if e.strip().startswith("."))
 
 
+def launch_argv(exe: str, rest: list[str] | None = None, *,
+                os_name: str | None = None) -> list[str]:
+    """交给 subprocess 的 argv。Windows 上 .cmd / .bat 必须经 cmd.exe。
+
+    CreateProcess 不跑批处理：解析出 mvn.cmd 的全路径之后若直接 run，
+    会报「不是有效的 Win32 应用程序」。终端里手敲 mvn 能跑，是因为壳转了一层。
+    """
+    rest = list(rest or [])
+    if (os_name or os.name) == "nt" and Path(exe).suffix.lower() in {".cmd", ".bat"}:
+        comspec = os.environ.get("COMSPEC") or "cmd.exe"
+        return [comspec, "/c", exe, *rest]
+    return [exe, *rest]
+
+
 def resolve_cmd(cmd: str, cwd: Path, *, exts: tuple[str, ...] | None = None) -> str | None:
     """把 argv[0] 解析成能直接交给操作系统的路径；找不到返回 None。
 
@@ -132,8 +146,8 @@ def run_step(cfg: Config, spec: dict) -> Step:
     try:
         # errors="replace"：Windows 中文 locale 下 mvn 的输出常常不是 cp936，
         # 解码炸掉会把「测试失败」误报成「跑不起来」
-        proc = subprocess.run([exe, *argv[1:]], cwd=wd, capture_output=True,
-                              text=True, errors="replace")
+        proc = subprocess.run(launch_argv(exe, argv[1:]), cwd=wd,
+                              capture_output=True, text=True, errors="replace")
     except OSError as e:
         return dead(f"命令跑不起来：{argv[0]}（{e.strerror or e}）")
     st.seconds = round(time.time() - t0, 2)

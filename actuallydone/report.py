@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -195,8 +196,11 @@ def open_report(path: Path) -> None:
         subprocess.run(["open", target], check=False)
     elif sys.platform == "win32":
         os.startfile(target)  # type: ignore[attr-defined]
-    else:
+    elif shutil.which("xdg-open"):
         subprocess.run(["xdg-open", target], check=False)
+    else:
+        import webbrowser
+        webbrowser.open(path.resolve().as_uri())
 
 
 def _short(h) -> str:

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -181,7 +182,8 @@ def check_skill(d: Path, root: Path, agent_lines: set[str],
                 continue
             executable = bool(p.stat().st_mode & 0o111)
             rep.scripts.append((p.name, executable))
-            if not executable:
+            # Windows 不认 Unix 可执行位，报 chmod 只会让人去干一件做不到的事
+            if os.name != "nt" and not executable:
                 add(Issue("警告", rep.name, f"scripts/{p.name}", "没有可执行位（chmod +x）"))
             if p.name not in text:
                 add(Issue("警告", rep.name, f"scripts/{p.name}",

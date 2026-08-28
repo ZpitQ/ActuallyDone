@@ -1,6 +1,6 @@
 # ActuallyDone
 
-当前版本 **v1.3.10**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.11**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
@@ -143,8 +143,8 @@ adone health --open                # 出一页健康度报告并打开
 
 | 系统 | 登记的 command | 本机还要有 |
 | --- | --- | --- |
-| macOS / Linux | `python3 -m actuallydone hook …` | PATH 里有 `python3` 和 `adone` |
-| Windows | `.cursor/hooks/gate-guard.exe` | 安装时复制的本机 `adone.exe`（不要提交这个 `.exe`） |
+| macOS / Linux | `python3 -m actuallydone hook …` | PATH 里有 `python3` 和 `adone`；不写 `.cmd` / `.exe` |
+| Windows | `.cursor/hooks/gate-guard.exe` | 安装时复制的本机 `adone.exe`（不要提交）；`.cmd` 只给手跑 |
 
 Windows 上升完必须 `adone install --hooks-only --force`，然后确认 command 是 `.exe`，
 新开一轮 Agent 对话后 `.adone\hook.log` 里应出现 `mark-dirty launched`。
@@ -352,13 +352,15 @@ A：Windows / Linux 都要把 pipx 的 bin 加进 PATH（`~/.local/bin` 或 `%US
 
 **Q：需要哪一版 Python？**  
 A：3.11+。钩子拿到的 PATH 常常和终端不一样，本机发生过被 conda 的 3.10 拉起、
-`import tomllib` 失败。`bin/adone` 会自己找一个够新的解释器；Linux 上还会去
-`~/.local/bin` 和 `~/.pyenv/shims` 翻。
+`import tomllib` 失败。`bin/adone` 会自己找一个够新的解释器：macOS / Linux 去
+`~/.local/bin`、`~/.pyenv/shims`；Windows 去 `py.exe` 和
+`%LOCALAPPDATA%\Programs\Python`。
 
 <br/>
 
 **Q：同一份配置能在 Windows、macOS、Linux 跑吗？**  
-A：能。`adone.toml` 里写 `mvn` / `npm` / `./mvnw` 即可，Windows 上会解析成 `.cmd`。
+A：能。`adone.toml` 里写 `mvn` / `npm` / `./mvnw` 即可，Windows 上会解析成 `.cmd`
+并由 `cmd /c` 拉起（CreateProcess 不能直接跑批处理）。
 **钩子不行：** `hooks.json` 按安装那台机器生成。Windows 登记 `.exe`，POSIX 登记 `python3`。
 各人在本机跑 `adone install --hooks-only --force`，不要提交对方的 command，也不要提交 `.exe`。
 

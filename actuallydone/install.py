@@ -565,44 +565,59 @@ def merge_hooks(existing: dict, cfg: Config | None = None) -> tuple[dict, int]:
 
 def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
     hooks_dir = cfg.root / ".cursor" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
     written = 0
 
     # Windows：CreateProcess 只能起 .exe。把 adone.exe / 专用入口复制成
     # .cursor/hooks/<name>.exe，hooks.json 只写这一条相对路径。
     # .cmd 仍写出，方便在终端里手跑对照；Cursor 不再登记它。
-    launcher = render((TEMPLATES / "hooks" / "hook-launch.cmd").read_text(encoding="utf-8"), v)
-    for name in OUR_LAUNCHERS:
-        dst = hooks_dir / name
-        if dst.exists() and not args.force:
-            print(f"  跳过已存在的 {dst.relative_to(cfg.root)}（要覆盖加 --force）")
-            continue
-        if args.dry_run:
-            print(f"  [演练] 将写入 {dst.relative_to(cfg.root)}")
-        else:
-            _write_lf(dst, launcher)
-            print(f"  写入 {dst.relative_to(cfg.root)}")
-        written += 1
+    # POSIX：Cursor 跑的是 hooks.json 里的 `python3 -m actuallydone hook …`，
+    # 写 .cmd / .exe 只会让人以为装错了系统。
+    if os.name == "nt":
+        launcher = render((TEMPLATES / "hooks" / "hook-launch.cmd").read_text(encoding="utf-8"), v)
+        for name in OUR_LAUNCHERS:
+            dst = hooks_dir / name
+            if dst.exists() and not args.force:
+                print(f"  跳过已存在的 {dst.relative_to(cfg.root)}（要覆盖加 --force）")
+                continue
+            if args.dry_run:
+                print(f"  [演练] 将写入 {dst.relative_to(cfg.root)}")
+            else:
+                _write_lf(dst, launcher)
+                print(f"  写入 {dst.relative_to(cfg.root)}")
+            written += 1
 
-    for stem, dest_name in (("mark-dirty", "mark-dirty.exe"),
-                            ("gate-guard", "gate-guard.exe")):
-        dst = hooks_dir / dest_name
-        src = find_hook_exe(stem)
-        if dst.exists() and not args.force:
-            print(f"  跳过已存在的 {dst.relative_to(cfg.root)}（要覆盖加 --force）")
-            continue
-        if src is None:
-            if os.name == "nt":
+        for stem, dest_name in (("mark-dirty", "mark-dirty.exe"),
+                                ("gate-guard", "gate-guard.exe")):
+            dst = hooks_dir / dest_name
+            src = find_hook_exe(stem)
+            if dst.exists() and not args.force:
+                print(f"  跳过已存在的 {dst.relative_to(cfg.root)}（要覆盖加 --force）")
+                continue
+            if src is None:
                 print(f"  找不到 {dest_name} 的来源（adone.exe / adone-hook-{stem}.exe）："
                       f"hooks.json 会登记它，但 Cursor 起不来。先 adone upgrade 再 "
                       f"adone install --hooks-only --force", file=sys.stderr)
-            continue
-        if args.dry_run:
-            print(f"  [演练] 将复制 {src} → {dst.relative_to(cfg.root)}")
-        else:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            print(f"  复制 {dst.relative_to(cfg.root)} ← {src}")
-        written += 1
+                continue
+            if args.dry_run:
+                print(f"  [演练] 将复制 {src} → {dst.relative_to(cfg.root)}")
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                print(f"  复制 {dst.relative_to(cfg.root)} ← {src}")
+            written += 1
+    else:
+        # 早先不分系统都写了 .cmd；重渲时清掉，避免 Mac 上以为钩子装错了
+        for name in (*OUR_LAUNCHERS, *OUR_EXES):
+            stale = hooks_dir / name
+            if not stale.is_file():
+                continue
+            if args.dry_run:
+                print(f"  [演练] 将删掉 {stale.relative_to(cfg.root)}（这是 Windows 启动器）")
+            else:
+                stale.unlink(missing_ok=True)
+                print(f"  删掉 {stale.relative_to(cfg.root)}（本系统不需要 Windows 启动器）")
+            written += 1
 
     # .cursor/hooks/*.py 在 Windows 上会被当成要打开的文件。逻辑已经进了
     # `adone hook`，这些副本必须删掉，否则还会弹出 gate-guard.py。

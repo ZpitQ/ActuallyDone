@@ -22,16 +22,46 @@ GUARD_ENV = "ADONE_BOOTSTRAPPED"
 CANDIDATE_NAMES = ("python3.14", "python3.13", "python3.12", "python3.11", "python3")
 # 钩子拿到的 PATH 可能很干净，PATH 里翻不着就去这些常见位置找。
 # Linux 上 pipx / 用户级 Python 落在 ~/.local/bin；pyenv 在 ~/.pyenv/shims。
+# Windows 上官方安装器在 %LOCALAPPDATA%\Programs\Python，启动器叫 py.exe。
 EXTRA_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin",
               "/Library/Frameworks/Python.framework/Versions/Current/bin")
 
 
+def candidate_names():
+    if os.name == "nt":
+        return ("py", "python") + CANDIDATE_NAMES
+    return CANDIDATE_NAMES
+
+
+def windows_extra_dirs():
+    home = os.path.expanduser("~")
+    local = os.environ.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local")
+    roaming = os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming")
+    out = [
+        os.path.join(local, "Programs", "Python", "Launcher"),
+        os.path.join(home, ".local", "pipx", "venvs", "actuallydone", "Scripts"),
+        os.path.join(local, "pipx", "venvs", "actuallydone", "Scripts"),
+        os.path.join(roaming, "Python", "Scripts"),
+    ]
+    programs = os.path.join(local, "Programs", "Python")
+    if os.path.isdir(programs):
+        for name in sorted(os.listdir(programs), reverse=True):
+            if name.lower().startswith("python"):
+                out.append(os.path.join(programs, name))
+                out.append(os.path.join(programs, name, "Scripts"))
+    return tuple(out)
+
+
 def extra_dirs():
     home = os.path.expanduser("~")
-    return EXTRA_DIRS + (
+    dirs = EXTRA_DIRS + (
         os.path.join(home, ".local", "bin"),
         os.path.join(home, ".pyenv", "shims"),
+        os.path.join(home, ".pyenv", "pyenv-win", "shims"),
     )
+    if os.name == "nt":
+        dirs = dirs + windows_extra_dirs()
+    return dirs
 
 
 def has_tomllib(exe):
@@ -50,7 +80,7 @@ def candidates(which=None, isfile=None):
     which = which or shutil.which
     isfile = isfile or os.path.isfile
     out = []
-    for name in CANDIDATE_NAMES:
+    for name in candidate_names():
         found = which(name)
         if found and found not in out:
             out.append(found)

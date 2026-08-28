@@ -71,6 +71,11 @@ class TestBootstrap(ProjectCase):
         seen = bootstrap.candidates(which=lambda n: None, isfile=lambda p: p == local)
         self.assertEqual(seen, [local])
 
+    def test_Windows安装目录在候选函数里(self):
+        dirs = bootstrap.windows_extra_dirs()
+        self.assertTrue(any("Programs" in d and "Python" in d and "Launcher" in d
+                            for d in dirs), dirs)
+
     def test_解释器够新时什么都不做(self):
         self.assertGreaterEqual(sys.version_info, bootstrap.MIN_VERSION)
         bootstrap.ensure_modern_python(__file__)   # 不该 exec，也不该退出
@@ -165,9 +170,20 @@ class TestCommandResolution(ProjectCase):
         self.assertIsNone(gate.resolve_cmd("./mvnw", self.root, exts=()))
 
     def test_PATH里的命令解析成全路径(self):
-        got = gate.resolve_cmd("python3", self.root, exts=())
+        got = gate.resolve_cmd(Path(sys.executable).name, self.root)
         self.assertIsNotNone(got)
         self.assertTrue(Path(got).is_absolute())
+
+    def test_Windows批处理要经cmd启动(self):
+        got = gate.launch_argv(r"C:\maven\bin\mvn.cmd", ["-B", "test"], os_name="nt")
+        self.assertEqual(got[1], "/c")
+        self.assertTrue(got[2].lower().endswith("mvn.cmd"))
+        self.assertEqual(got[3:], ["-B", "test"])
+        self.assertTrue(got[0].lower().endswith("cmd.exe") or Path(got[0]).name.lower() == "cmd.exe")
+
+    def test_POSIX不包一层cmd(self):
+        self.assertEqual(gate.launch_argv("/usr/bin/mvn", ["test"], os_name="posix"),
+                         ["/usr/bin/mvn", "test"])
 
     def test_找不到的命令返回None(self):
         self.assertIsNone(

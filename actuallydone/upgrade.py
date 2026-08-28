@@ -163,7 +163,7 @@ def classify_entry(entry: Path) -> str:
         if "from actuallydone.cli import main" in text:
             return "pip"
     p = entry.resolve()
-    if p.name == "adone":
+    if p.stem.lower() == "adone":
         root = p.parent.parent
         if (root / "actuallydone" / "__init__.py").is_file() and (root / ".git").exists():
             return "git"
@@ -236,7 +236,8 @@ def run_upgrade(mode: str, ref: str, root: Path) -> tuple[int, str]:
 def _verify_path_adone() -> str:
     which = shutil.which("adone")
     if not which:
-        return "PATH 里还是没有 adone。新开一个终端，或检查 ~/.local/bin 在不在 PATH 里。"
+        return ("PATH 里还是没有 adone。新开一个终端，或检查 pipx 的 bin "
+                "（macOS/Linux：~/.local/bin；Windows：%USERPROFILE%\\.local\\bin）在不在 PATH 里。")
     proc = subprocess.run([which, "--version"], capture_output=True, text=True)
     out = (proc.stdout or proc.stderr or "").strip()
     return f"PATH 上的 {which} → {out or '跑 --version 失败'}"
