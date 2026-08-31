@@ -218,7 +218,9 @@ class TestHooksJson(ProjectCase):
         }}
         merged, kept = install.merge_hooks(mine)
         self.assertEqual(kept, 2)
-        self.assertEqual(merged["hooks"]["beforeShellExecution"], [{"command": "./my-guard.sh"}])
+        foreign = [h["command"] for h in merged["hooks"]["beforeShellExecution"]]
+        self.assertEqual(foreign[0], "./my-guard.sh")
+        self.assertTrue(any("commit-guard" in c for c in foreign), foreign)
         cmds = [h["command"] for h in merged["hooks"]["stop"]]
         self.assertEqual(cmds[0], "./my-stop.sh")
         self.assertIn("gate-guard", cmds[1])
@@ -234,14 +236,16 @@ class TestHooksJson(ProjectCase):
         POSIX 上登记显式解释器，不靠 shebang。"""
         merged, _ = install.merge_hooks({})
         want = {"sessionStart": "mark-dirty", "afterFileEdit": "mark-dirty",
-                "stop": "gate-guard"}
+                "stop": "gate-guard", "beforeShellExecution": "commit-guard"}
         for event, name in want.items():
-            cmd = merged["hooks"][event][0]["command"]
+            cmd = merged["hooks"][event][-1]["command"]
             self.assertNotIn(".py", cmd)
             self.assertIn(name, cmd)
             if os.name == "nt":
                 self.assertEqual(cmd, f".cursor/hooks/{name}.exe")
                 self.assertFalse(install.windows_hook_never_starts(cmd))
+        self.assertEqual(merged["hooks"]["beforeShellExecution"][-1]["matcher"],
+                         r"git\s+commit")
 
     def test_旧版bash钩子会被摘掉(self):
         old = {"version": 1, "hooks": {
@@ -380,10 +384,10 @@ class TestDoctorChecksHooks(ProjectCase):
         self.install_hooks()
         self.assertFalse((self.root / ".cursor" / "hooks" / "gate-guard.py").exists())
         if os.name != "nt":
-            for name in ("mark-dirty.cmd", "gate-guard.cmd"):
+            for name in ("mark-dirty.cmd", "gate-guard.cmd", "commit-guard.cmd"):
                 self.assertFalse((self.root / ".cursor" / "hooks" / name).exists(), name)
             return
-        for name in ("mark-dirty.cmd", "gate-guard.cmd"):
+        for name in ("mark-dirty.cmd", "gate-guard.cmd", "commit-guard.cmd"):
             p = self.root / ".cursor" / "hooks" / name
             self.assertTrue(p.is_file(), name)
             text = p.read_text(encoding="utf-8")
@@ -447,6 +451,9 @@ class TestDoctorChecksHooks(ProjectCase):
         self.assertEqual(
             (self.root / ".cursor" / "hooks" / "mark-dirty.exe").read_bytes(),
             b"MZ")
+        self.assertEqual(
+            (self.root / ".cursor" / "hooks" / "commit-guard.exe").read_bytes(),
+            b"MZ")
 
     def test_重渲会删掉残留的py(self):
         self.make_go_project()
@@ -484,15 +491,55 @@ class TestHookrun(ProjectCase):
         self.assertIn("internal/calc.go",
                       (self.root / ".adone" / "dirty").read_text(encoding="utf-8"))
 
-    def test_gate_guard没有回执时必须回推(self):
+    def test_gate_guard无dirty不回推即使没有回执(self):
         self.make_go_project()
         self.write("adone.toml",
                    "version = 1\n[project]\nname = 'f'\n"
                    "[gate]\nwatch_roots = ['internal']\nwatch_exts = ['.go']\n"
                    "min_tree_files = 1\n")
         got = self.fire("gate-guard", {"status": "completed", "loop_count": 0})
-        self.assertIn("followup_message", got)
-        self.assertIn("完成门禁", got["followup_message"])
+        self.assertEqual(got, {})
+        self.assertFalse((self.root / ".adone" / "latest.json").exists())
+
+    def test_gate_guard有dirty且找不到相关用例时回推且不提全量run(self):
+        self.make_go_project()
+        self.write("adone.toml",
+                   "version = 1\n[project]\nname = 'f'\n"
+                   "ecosystems = ['go']\n"
+                   "[gate]\nwatch_roots = ['internal']\nwatch_exts = ['.go']\n"
+                   "min_tree_files = 1\n"
+                   "[[gate.step]]\nname = 'go test'\nkind = 'test'\n"
+                   "adapter = 'go'\nargv = ['go', 'test', './...']\n"
+                   "[tests]\nadapter = 'go'\n")
+        self.write("internal/orphan.go", "package internal\nfunc Orphan() {}\n")
+        dest = self.root / ".adone" / "dirty"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("internal/orphan.go\n", encoding="utf-8")
+        got = self.fire("gate-guard", {"status": "completed", "loop_count": 0})
+        msg = got["followup_message"]
+        self.assertIn("相关用例", msg)
+        self.assertIn("--changed", msg)
+        self.assertIn("不要", msg)
+        self.assertIn("全量", msg)
+        self.assertNotIn("重跑门禁", msg)
+
+    def test_commit_guard非commit放行(self):
+        self.make_go_project()
+        self.write("adone.toml",
+                   "version = 1\n[project]\nname = 'f'\n"
+                   "[gate]\nwatch_roots = ['internal']\nwatch_exts = ['.go']\n")
+        got = self.fire("commit-guard", {"command": "git status"})
+        self.assertEqual(got.get("permission"), "allow")
+
+    def test_commit_guard回执不过则deny即使no_verify(self):
+        self.make_go_project()
+        self.write("adone.toml",
+                   "version = 1\n[project]\nname = 'f'\n"
+                   "[gate]\nwatch_roots = ['internal']\nwatch_exts = ['.go']\n"
+                   "min_tree_files = 1\n")
+        got = self.fire("commit-guard", {"command": "git commit --no-verify -m x"})
+        self.assertEqual(got.get("permission"), "deny")
+        self.assertIn("全量", got.get("agent_message", ""))
 
     def test_回推JSON按UTF8写出(self):
         """Windows 上 stdout 默认 cp936 时，Cursor 按 UTF-8 解析会失败，

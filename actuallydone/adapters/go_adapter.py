@@ -95,6 +95,30 @@ class GoAdapter(Adapter):
             return None
         return ["go", "test", "./...", "-run", f"^{top}$", "-count=1", "-v"]
 
+    def related_tests(self, rel_paths: list[str]) -> list[str] | None:
+        names: list[str] = []
+        for rel in rel_paths:
+            p = self.root / rel
+            if p.suffix != ".go":
+                continue
+            target = p if p.name.endswith("_test.go") else p.with_name(p.stem + "_test.go")
+            if target.is_file():
+                names.extend(TESTFUNC_RE.findall(read(target)))
+        return sorted(set(names))
+
+    def related_test_argv(self, names: list[str]) -> list[str] | None:
+        tops: list[str] = []
+        seen: set[str] = set()
+        for n in names:
+            top = n.split("/")[0]
+            if top and top not in seen:
+                seen.add(top)
+                tops.append(top)
+        if not tops:
+            return None
+        pattern = "^(" + "|".join(re.escape(t) for t in tops) + ")$"
+        return ["go", "test", "./...", "-run", pattern, "-count=1", "-v"]
+
     def iter_test_funcs(self, path: Path) -> list[FuncBody]:
         return [f for f in brace_funcs(read(path).splitlines(), FUNC_START, func_name)
                 if f.name.startswith("Test")]

@@ -1,6 +1,6 @@
 # ActuallyDone
 
-当前版本 **v1.3.13**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.14**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
@@ -38,8 +38,8 @@ ActuallyDone 提供一条命令 `adone`，让「完成」变成**别人可以独
 
 | 层 | 职责 |
 | --- | --- |
-| 会话层 | Cursor 钩子：`sessionStart` 写探针、`afterFileEdit` 记 dirty、`stop` 收工时跑门禁并回推 |
-| 工具层 | `gate run` 真跑并写回执；`gate check` 一秒复核；`integrity` / `policy` 锁基线；`audit` 独立复核；`health` 出健康页 |
+| 会话层 | Cursor 钩子：`afterFileEdit` 记 dirty；`stop` 有 dirty 时跑相关用例；`git commit` 时全量门禁 |
+| 工具层 | `gate run --changed` 开发中增量；`gate run` 全量写回执；`gate check` 一秒复核；`integrity` / `policy` 锁基线；`audit` 独立复核；`health` 出健康页 |
 | 人写的判据 | `adone.toml`、验收契约、需求台账。入库。 |
 | 磁盘上的证据 | 回执、回执链、两份基线、审计结论、健康报告。基线与链头建议入库，回执本身不必。 |
 
@@ -101,10 +101,10 @@ adone upgrade
 cd 你的项目
 adone init                         # 探测生态，生成 adone.toml（不猜覆盖率阈值）
 adone doctor                       # 核路径、命令、钩子
-adone gate run                     # 真跑门禁，按实测回填 coverage.threshold
+adone gate run                     # 全量门禁，按实测回填 coverage.threshold
 adone integrity --accept-baseline "建立初始基线"
 adone policy                       # 确认判据基线（首次 gate run 会自动建）
-adone install --with-hooks         # 技能 + 钩子写入 .cursor/
+adone install --with-hooks         # 技能 + 钩子 + 本机 .git/hooks/pre-commit
 adone health --open                # 出一页健康度报告并打开
 ```
 
@@ -452,6 +452,14 @@ A：把步骤写成 `mvn -B -ntp jacoco:prepare-agent test jacoco:report`。
 **Q：`adone detect --write` 把阈值冲掉了？**  
 A：新接入一门生态用 `adone detect --merge`。不要用 `--write` 覆盖已有配置。
 测试适配器除非加 `--adopt-tests`，否则不改。
+
+<br/>
+
+**Q：问一句设计、没改代码，也被推去跑全量测试？**  
+A：那是 1.3.14 之前的设计：把每一轮 `stop` 当成「宣称完成」。现在 dirty 为空就不回推；
+有 dirty 只跑 `adone gate run --changed`。全量是 `git commit`（人与 Agent 都会走
+pre-commit / `beforeShellExecution`）或你自己宣称完成时才跑。升完要
+`adone install --hooks-only --force`。
 
 <br/>
 

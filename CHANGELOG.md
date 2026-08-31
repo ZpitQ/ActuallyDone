@@ -2,6 +2,17 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.14 — 2026-08-31
+
+- **开发中增量、提交时全量**：Cursor `stop` 的 `completed` 只表示这轮说完了，不是「做完了」。
+  dirty 为空时不回推（问答、读代码不再被推去跑全量）；有 dirty 时只跑
+  `adone gate run --changed`（相关用例，写 `.adone/partial.json`，不覆盖 `latest.json`）。
+  找不到相关用例就回推「写一条再继续」，不退回全量。
+- **提交才写完成回执**：`install --with-hooks` 写入本机 `.git/hooks/pre-commit`
+  （回执不新鲜则 `gate run`）；Cursor `beforeShellExecution` 命中 `git commit`
+  （含 `--no-verify`）时先 `gate check`，不对就拒绝。
+- 已装钩子的项目要 `adone install --hooks-only --force` 才会更新技能与登记。
+
 ## v1.3.13 — 2026-08-31
 
 - **C++ 适配器**：认 `CMakeLists.txt` / `meson.build`。CMake 步骤同一份 argv

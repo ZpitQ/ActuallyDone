@@ -125,6 +125,36 @@ class NodeAdapter(Adapter):
             out.append(FuncBody(name=m.group(1).strip(), line=i + 1, body=body[1:-1]))
         return out
 
+    def related_tests(self, rel_paths: list[str]) -> list[str] | None:
+        names: list[str] = []
+        indexed = self.test_files([self.root])
+        suffixes = (".test.ts", ".test.tsx", ".test.js",
+                    ".spec.ts", ".spec.tsx", ".spec.js")
+        for rel in rel_paths:
+            p = self.root / rel
+            if p.suffix not in self.source_exts:
+                continue
+            if any(p.name.endswith(s) for s in suffixes):
+                if p.is_file():
+                    names.extend(n.strip() for n in NAME_RE.findall(read(p)))
+                continue
+            stem = p.stem
+            for suf in suffixes:
+                cand = p.with_name(stem + suf)
+                if cand.is_file():
+                    names.extend(n.strip() for n in NAME_RE.findall(read(cand)))
+            want = {f"{stem}.test", f"{stem}.spec"}
+            for tf in indexed:
+                if tf.stem in want:
+                    names.extend(n.strip() for n in NAME_RE.findall(read(tf)))
+        return sorted(set(names))
+
+    def related_test_argv(self, names: list[str]) -> list[str] | None:
+        if not names:
+            return None
+        pattern = "|".join(re.escape(n) for n in names)
+        return ["npm", "run", "test", "--", "--run", "-t", pattern]
+
     def is_assertionless(self, body: list[str]) -> bool:
         return not any(w in ln for ln in body for w in ASSERT_WORDS)
 

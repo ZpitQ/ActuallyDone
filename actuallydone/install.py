@@ -150,11 +150,14 @@ def variables(cfg: Config) -> dict[str, str]:
 def _hooks_note(cfg: Config, cmd: str) -> str:
     hooks = cfg.root / ".cursor" / "hooks.json"
     if hooks.exists():
-        return (f"`.cursor/hooks.json` 里 `stop` 钩子会在你想收工时跑 `{cmd} gate check`，"
-                f"不通过就把问题列表作为下一条用户消息推回来（`loop_limit` 为 3，最多推三次）。"
-                f"它没有否决权——但你若无视它硬说完成，问题清单会白纸黑字留在会话里。")
+        return (f"`stop` 只在本轮改了受监视文件时跑 `{cmd} gate run --changed`"
+                f"（相关用例，不写 latest.json；`loop_limit` 为 3）。"
+                f"问答、读代码、没改受监视文件时钩子不应出现。"
+                f"`git commit` 时 `beforeShellExecution` 先 `{cmd} gate check`，"
+                f"全量回执对不上就拒绝（`--no-verify` 也拦）；"
+                f"本机 `.git/hooks/pre-commit` 在回执不新鲜时跑全量 `{cmd} gate run`。")
     return (f"本项目还没装钩子。装上之后（`{cmd} install --with-hooks`），"
-            f"Agent 想收工时会自动跑一次 `gate check`，不通过就把问题推回来。")
+            f"改了受监视文件后的 stop 只跑相关用例；提交时才跑全量门禁。")
 
 
 def render(text: str, v: dict[str, str]) -> str:
@@ -322,6 +325,13 @@ def hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
         problems.append("钩子找不到 adone（仓库内入口、PATH 都不行）："
                         "它会把「门禁没跑成」推回给 Agent，等于门禁形同虚设。"
                         "装好 adone 后重跑 adone install --hooks-only --force")
+    if "commit-guard" in registered:
+        lines.append("  提交：beforeShellExecution 命中 git commit 时先 gate check")
+    pre = cfg.root / ".git" / "hooks" / "pre-commit"
+    if pre.is_file() and PRE_COMMIT_MARK in pre.read_text(encoding="utf-8", errors="replace"):
+        lines.append("  git pre-commit：已装（回执不新鲜时跑全量 gate run）")
+    elif (cfg.root / ".git").exists():
+        lines.append("  git pre-commit：未安装（adone install --with-hooks 写入本机）")
     return lines, problems
 
 
@@ -486,9 +496,10 @@ def _resolve_adone(root: Path, entry: str, cmd: str) -> str:
     return ""
 
 
-OUR_SCRIPTS = ("mark-dirty.py", "gate-guard.py")
-OUR_LAUNCHERS = ("mark-dirty.cmd", "gate-guard.cmd")
-OUR_EXES = ("mark-dirty.exe", "gate-guard.exe")
+OUR_SCRIPTS = ("mark-dirty.py", "gate-guard.py", "commit-guard.py")
+OUR_LAUNCHERS = ("mark-dirty.cmd", "gate-guard.cmd", "commit-guard.cmd")
+OUR_EXES = ("mark-dirty.exe", "gate-guard.exe", "commit-guard.exe")
+PRE_COMMIT_MARK = "actuallydone pre-commit"
 # 早先 afterFileEdit 挂的是 bash 版：Windows 上没有 bash 也没有 jq，Cursor 起不动它。
 # v1.3.3 又改成登记 .py / `cmd /c py -3 …py`：Windows 按文件关联打开 .py。
 # v1.3.4–1.3.7 登记 .cmd：CreateProcess 不能直接跑批处理，手跑可以、钩子不触发。
@@ -534,8 +545,11 @@ def our_hooks(cfg: Config | None = None) -> dict:
         "afterFileEdit": [
             {"command": hook_command("mark-dirty", cfg), "timeout": 10}],
         "stop": [
-            {"command": hook_command("gate-guard", cfg), "timeout": 120,
+            {"command": hook_command("gate-guard", cfg), "timeout": 180,
              "loop_limit": 3, "failClosed": False}],
+        "beforeShellExecution": [
+            {"command": hook_command("commit-guard", cfg), "timeout": 30,
+             "matcher": r"git\s+commit", "failClosed": True}],
     }
 
 
@@ -558,7 +572,7 @@ def merge_hooks(existing: dict, cfg: Config | None = None) -> tuple[dict, int]:
     events = dict(out.get("hooks") or {})
     ours_all = our_hooks(cfg)
     mine = (*OUR_SCRIPTS, *OUR_LAUNCHERS, *OUR_EXES, *LEGACY_SCRIPTS,
-            "hook mark-dirty", "hook gate-guard")
+            "hook mark-dirty", "hook gate-guard", "hook commit-guard")
     kept = 0
     for event, ours in ours_all.items():
         foreign = [h for h in (events.get(event) or [])
@@ -597,7 +611,8 @@ def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
             written += 1
 
         for stem, dest_name in (("mark-dirty", "mark-dirty.exe"),
-                                ("gate-guard", "gate-guard.exe")):
+                                ("gate-guard", "gate-guard.exe"),
+                                ("commit-guard", "commit-guard.exe")):
             dst = hooks_dir / dest_name
             src = find_hook_exe(stem)
             if dst.exists() and not args.force:
@@ -646,14 +661,62 @@ def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
         print(f"  跳过已存在的 {cfg_path.relative_to(cfg.root)}（要覆盖加 --force，"
               f"会保留你自己写在里面的其他钩子）；需要的配置是：\n"
               f"{json.dumps(our_hooks(cfg), ensure_ascii=False, indent=2)}")
-        return written
-
-    merged, kept = merge_hooks(_read_json(cfg_path), cfg)
-    if args.dry_run:
-        print(f"  [演练] 将写入 {cfg_path.relative_to(cfg.root)}"
-              + (f"（保留其中 {kept} 条不属于 adone 的钩子）" if kept else ""))
     else:
-        _write(cfg_path, json.dumps(merged, ensure_ascii=False, indent=2) + "\n")
-        print(f"  写入 {cfg_path.relative_to(cfg.root)}"
-              + (f"（保留其中 {kept} 条不属于 adone 的钩子）" if kept else ""))
-    return written + 1
+        merged, kept = merge_hooks(_read_json(cfg_path), cfg)
+        if args.dry_run:
+            print(f"  [演练] 将写入 {cfg_path.relative_to(cfg.root)}"
+                  + (f"（保留其中 {kept} 条不属于 adone 的钩子）" if kept else ""))
+        else:
+            _write(cfg_path, json.dumps(merged, ensure_ascii=False, indent=2) + "\n")
+            print(f"  写入 {cfg_path.relative_to(cfg.root)}"
+                  + (f"（保留其中 {kept} 条不属于 adone 的钩子）" if kept else ""))
+        written += 1
+    written += _install_git_pre_commit(cfg, args)
+    return written
+
+
+PRE_COMMIT_SH = """#!/bin/sh
+# actuallydone pre-commit — 本机生成，不要入库。
+# 全量回执已新鲜则放行；否则跑 adone gate run。
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+run() {
+  if command -v adone >/dev/null 2>&1; then
+    adone "$@"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -m actuallydone "$@"
+  else
+    echo "pre-commit: 找不到 adone，拒绝提交。先装 adone 或把 python3 放进 PATH。" >&2
+    exit 1
+  fi
+}
+if run gate check >/dev/null 2>&1; then
+  exit 0
+fi
+echo "pre-commit: 全量回执不新鲜或不通过，跑 adone gate run" >&2
+run gate run
+"""
+
+
+def _install_git_pre_commit(cfg: Config, args) -> int:
+    git_dir = cfg.root / ".git"
+    if not git_dir.is_dir():
+        print("  跳过 git pre-commit（这里不是 git 仓库）")
+        return 0
+    dest = git_dir / "hooks" / "pre-commit"
+    existing = dest.read_text(encoding="utf-8") if dest.is_file() else ""
+    ours = PRE_COMMIT_MARK in existing
+    if dest.is_file() and not ours and not args.force:
+        print(f"  跳过已存在的 .git/hooks/pre-commit（不是 adone 写的；要覆盖加 --force）")
+        return 0
+    if args.dry_run:
+        print("  [演练] 将写入 .git/hooks/pre-commit（本机，不入库）")
+        return 1
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _write_lf(dest, PRE_COMMIT_SH)
+    try:
+        dest.chmod(dest.stat().st_mode | 0o111)
+    except OSError:
+        pass
+    print("  写入 .git/hooks/pre-commit（本机，不入库：回执不新鲜时跑全量 gate run）")
+    return 1

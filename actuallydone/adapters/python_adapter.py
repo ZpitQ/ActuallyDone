@@ -86,6 +86,38 @@ class PythonAdapter(Adapter):
             return ["python3", "-m", "pytest", "-q", name]
         return ["python3", "-m", "unittest", "discover", "-v", "-k", name]
 
+    def related_tests(self, rel_paths: list[str]) -> list[str] | None:
+        names: list[str] = []
+        indexed = self.test_files([self.root])
+        for rel in rel_paths:
+            p = self.root / rel
+            if p.suffix != ".py":
+                continue
+            stem = p.stem
+            targets: list[Path] = []
+            if stem.startswith("test_") or stem.endswith("_test"):
+                if p.is_file():
+                    targets.append(p)
+            else:
+                for cand in (p.with_name(f"test_{stem}.py"),
+                             p.with_name(f"{stem}_test.py")):
+                    if cand.is_file():
+                        targets.append(cand)
+                for tf in indexed:
+                    if tf.stem in {f"test_{stem}", f"{stem}_test"}:
+                        targets.append(tf)
+            for t in targets:
+                names.extend(DEF_TEST_RE.findall(read(t)))
+        return sorted(set(names))
+
+    def related_test_argv(self, names: list[str]) -> list[str] | None:
+        if not names:
+            return None
+        if any("::" in n for n in names):
+            return ["python3", "-m", "pytest", "-q", *names]
+        return ["python3", "-m", "unittest", "discover", "-v",
+                "-k", " or ".join(names)]
+
     def iter_test_funcs(self, path: Path) -> list[FuncBody]:
         return [f for f in self.iter_funcs(path) if f.name.startswith("test")]
 

@@ -210,6 +210,10 @@ class Config:
         return self.state_dir / "dirty"
 
     @property
+    def partial(self) -> Path:
+        return self.state_dir / "partial.json"
+
+    @property
     def report(self) -> Path:
         return self.state_dir / "report.html"
 

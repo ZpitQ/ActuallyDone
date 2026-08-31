@@ -78,6 +78,24 @@ class Adapter:
         """只跑这一条用例的命令。做不到就返回 None，上层会标「未评估」。"""
         return None
 
+    def related_tests(self, rel_paths: list[str]) -> list[str] | None:
+        """按改动文件找相关用例名。None = 适配器不会找；空列表 = 找过了没有。
+
+        空列表不能当成绿：上层必须回推「找不到相关用例」，不许退回全量、
+        也不许空跑冒充通过。
+        """
+        return None
+
+    def related_test_argv(self, names: list[str]) -> list[str] | None:
+        """一次跑这批相关用例的临时命令。做不到返回 None。
+
+        这是临时 argv，不写进 adone.toml，判据锁不读它。
+        默认只会在恰好一条时退回 single_test_argv。
+        """
+        if len(names) == 1:
+            return self.single_test_argv(names[0])
+        return None
+
     def iter_test_funcs(self, path: Path) -> list[FuncBody]:
         """测试文件里的用例函数，供无断言检测用。"""
         return []
@@ -109,6 +127,12 @@ class Adapter:
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
+
+
+def companion_stems(stem: str) -> tuple[str, ...]:
+    """实现文件 stem 对应的常见测试文件名（不含后缀）。"""
+    return (f"{stem}Test", f"{stem}Tests", f"Test{stem}",
+            f"{stem}_test", f"{stem}_tests", f"test_{stem}")
 
 
 def brace_funcs(lines: list[str], start_re: re.Pattern, name_of) -> list[FuncBody]:

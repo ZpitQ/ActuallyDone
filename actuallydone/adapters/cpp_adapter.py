@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ..model import FuncBody, TestResult
 from .base import (CAP_COVERAGE, CAP_FUNCS, CAP_SINGLE_TEST, CAP_TESTS, Adapter,
-                   brace_funcs, read)
+                   brace_funcs, companion_stems, read)
 
 # GoogleTest / 自研迷你跑器：可选的 CTest「1: 」前缀
 GTEST_OK_RE = re.compile(r"^(?:\d+:\s*)?\[\s+OK\s+\]\s+(\S+)", re.M)
@@ -171,6 +171,49 @@ class CppAdapter(Adapter):
                 "--output-on-failure", "-V", "-C", "Release",
                 "-R", f"^{re.escape(name.split('.')[0] if '.' in name else name)}",
                 "--", f"--gtest_filter={filt}", f"--only={filt}"]
+
+    def _names_in(self, path: Path) -> list[str]:
+        if not path.is_file():
+            return []
+        text = read(path)
+        return ([_gtest_name(a, b) for a, b in GTEST_MACRO_RE.findall(text)]
+                + CATCH_MACRO_RE.findall(text))
+
+    def related_tests(self, rel_paths: list[str]) -> list[str] | None:
+        indexed = self.test_files([self.root])
+        names: list[str] = []
+        for rel in rel_paths:
+            p = self.root / rel
+            if p.suffix.lower() not in self.source_exts:
+                continue
+            if _is_test_file(p):
+                names.extend(self._names_in(p))
+                continue
+            stem = p.stem.lower()
+            want = {s.lower() for s in companion_stems(p.stem)}
+            for tf in indexed:
+                if tf.stem.lower() in want or stem in tf.stem.lower():
+                    names.extend(self._names_in(tf))
+                    continue
+                for n in self._names_in(tf):
+                    suite = n.split(".", 1)[0].lower()
+                    if stem == suite or stem in suite:
+                        names.append(n)
+        return sorted(set(names))
+
+    def related_test_argv(self, names: list[str]) -> list[str] | None:
+        parts: list[str] = []
+        seen: set[str] = set()
+        for n in names:
+            key = n.split(".", 1)[0] if "." in n else n
+            if key and key not in seen:
+                seen.add(key)
+                parts.append(re.escape(key))
+        if not parts:
+            return None
+        return ["cmake", "-E", "chdir", "build", "ctest",
+                "--output-on-failure", "-V", "-C", "Release",
+                "-R", f"^({'|'.join(parts)})"]
 
     def iter_test_funcs(self, path: Path) -> list[FuncBody]:
         lines = read(path).splitlines()

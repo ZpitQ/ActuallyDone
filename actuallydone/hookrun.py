@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -145,39 +146,91 @@ def cmd_gate_guard(_args=None) -> int:
             "（或它的子目录），再谈完成。",
         ])})
 
+    from .gate import read_dirty
+    dirty = read_dirty(cfg)
+    if not dirty:
+        _log(cfg, "stop", "dirty 为空，本轮无受监视改动，不回推", root)
+        return _emit({})
+
     try:
-        from .gate import collect_check
-        data = collect_check(cfg)
+        from .changed import run_changed
+        data = run_changed(cfg, paths=dirty, quiet=True)
     except Exception as e:
-        _log(cfg, "stop", f"check 跑不起来（{type(e).__name__}: {e}），已回推", root)
+        _log(cfg, "stop", f"--changed 跑不起来（{type(e).__name__}: {e}），已回推", root)
         return _emit({"followup_message": "\n".join([
-            f"【完成门禁没跑成】gate check 没能给出结果（{type(e).__name__}）：",
+            f"【相关用例没跑成】gate run --changed 没能给出结果（{type(e).__name__}）：",
             "", str(e), "",
-            "这不等于门禁通过——现在没有任何证据表明活干完了。",
+            "只跑 `adone gate run --changed`，不要跑全量 `gate run`。",
+            "全量是 git commit / 宣称完成时的事。",
         ])})
 
     if data.get("ok"):
-        _log(cfg, "stop", f"门禁通过（回执 {data.get('receipt_id')}），放行")
+        _log(cfg, "stop", f"相关用例通过（{len(dirty)} 个 dirty），放行")
         return _emit({})
 
     problems = data.get("problems") or []
     skills = cfg.get("project.skills_dir") or ".cursor/skills"
-    lines = ["【完成门禁未通过】以下问题在你宣称完成之前必须处理：", ""]
+    lines = ["【相关用例未通过】本轮改了受监视文件，相关测试没过。先修这些问题，不要跑全量门禁：", ""]
     lines += [f"{i}. {p}" for i, p in enumerate(problems, 1)]
     lines += [
         "",
-        f"按 {skills}/completion-gate/SKILL.md 处理：修掉问题后重跑门禁，"
-        f"拿到与当前代码哈希一致的新回执，再收工。",
-        "如果确实无法通过（例如本机缺依赖、门禁跑不起来），不要绕过，"
-        "直接告诉我卡在哪一步、看到什么输出。",
+        f"按 {skills}/completion-gate/SKILL.md：只跑 `adone gate run --changed`。",
+        "不要跑 `adone gate run` 全量——那是 git commit 或宣称完成时的事。",
+        "如果找不到相关用例，先写一条对着这些文件的测试再继续。",
+        "如果确实跑不起来，直接告诉我卡在哪一步、看到什么输出。",
     ]
-    _log(cfg, "stop", f"未通过（{len(problems)} 个问题，loop_count={loops}），已回推")
+    _log(cfg, "stop", f"相关用例未通过（{len(problems)} 个问题，loop_count={loops}），已回推")
     return _emit({"followup_message": "\n".join(lines)})
+
+
+_COMMIT_RE = re.compile(r"\bgit\b(?:\s+\S+)*\s+commit\b")
+
+
+def _is_git_commit(command: str) -> bool:
+    return bool(_COMMIT_RE.search(command or ""))
+
+
+def cmd_commit_guard(_args=None) -> int:
+    """beforeShellExecution：git commit（含 --no-verify）必须先有新鲜的全量回执。"""
+    cfg, root = _load()
+    _log(cfg, "beforeShellExecution", "commit-guard launched", root)
+    payload = _payload()
+    command = payload.get("command") or ""
+    if not _is_git_commit(command):
+        return _emit({"permission": "allow"})
+
+    if cfg is None:
+        _log(cfg, "beforeShellExecution", "找不到 adone.toml，已拒绝提交", root)
+        msg = ("找不到 adone.toml，不能在没有完成门禁的情况下提交。"
+               "把工作区开在放 adone.toml 的那一层，先跑 adone gate run（全量）。")
+        return _emit({"permission": "deny", "user_message": msg, "agent_message": msg})
+
+    try:
+        from .gate import collect_check
+        data = collect_check(cfg)
+    except Exception as e:
+        _log(cfg, "beforeShellExecution", f"check 跑不起来（{type(e).__name__}: {e}）", root)
+        msg = (f"gate check 没能给出结果（{type(e).__name__}）：{e}\n"
+               "先跑 adone gate run（全量）再 git commit。")
+        return _emit({"permission": "deny", "user_message": msg, "agent_message": msg})
+
+    if data.get("ok"):
+        _log(cfg, "beforeShellExecution", f"全量回执通过（{data.get('receipt_id')}），允许提交")
+        return _emit({"permission": "allow"})
+
+    problems = data.get("problems") or []
+    msg = "\n".join([
+        "全量门禁未通过，不能提交。先跑 adone gate run（全量），再 git commit。",
+        *[f"- {p}" for p in problems],
+    ])
+    _log(cfg, "beforeShellExecution", f"拒绝提交（{len(problems)} 个问题）")
+    return _emit({"permission": "deny", "user_message": msg, "agent_message": msg})
 
 
 HOOKS = {
     "mark-dirty": cmd_mark_dirty,
     "gate-guard": cmd_gate_guard,
+    "commit-guard": cmd_commit_guard,
 }
 
 

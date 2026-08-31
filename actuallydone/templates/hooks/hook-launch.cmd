@@ -17,8 +17,9 @@ if exist "%LOCALAPPDATA%\Programs\Python\Launcher\py.exe" (
   "%LOCALAPPDATA%\Programs\Python\Launcher\py.exe" -3 -m actuallydone hook %NAME%
   exit /b %ERRORLEVEL%
 )
-if /i "%NAME%"=="gate-guard" echo {"followup_message":"【完成门禁没跑成】钩子找不到 adone.exe。重跑 adone install --hooks-only --force。这不等于门禁通过。"}
-if /i not "%NAME%"=="gate-guard" echo {}
+if /i "%NAME%"=="gate-guard" echo {"followup_message":"【相关用例没跑成】钩子找不到 adone.exe。重跑 adone install --hooks-only --force。只跑 gate run --changed，不要跑全量。"}
+if /i "%NAME%"=="commit-guard" echo {"permission":"deny","user_message":"钩子找不到 adone.exe，不能提交。重跑 adone install --hooks-only --force，再跑 adone gate run（全量）。"}
+if /i not "%NAME%"=="gate-guard" if /i not "%NAME%"=="commit-guard" echo {}
 exit /b 0
 :run
 if /i "%ADONE:~-4%"==".cmd" call "%ADONE%" hook %NAME%
@@ -55,7 +56,9 @@ command -v adone >/dev/null 2>&1 && exec adone hook "$NAME"
 command -v py >/dev/null 2>&1 && exec py -3 -m actuallydone hook "$NAME"
 command -v python >/dev/null 2>&1 && exec python -m actuallydone hook "$NAME"
 if [ "$NAME" = "gate-guard" ]; then
-  printf '%s\n' '{"followup_message":"【完成门禁没跑成】钩子找不到 adone。重跑 adone install --hooks-only --force。这不等于门禁通过。"}'
+  printf '%s\n' '{"followup_message":"【相关用例没跑成】钩子找不到 adone。重跑 adone install --hooks-only --force。只跑 gate run --changed，不要跑全量。"}'
+elif [ "$NAME" = "commit-guard" ]; then
+  printf '%s\n' '{"permission":"deny","user_message":"钩子找不到 adone，不能提交。重跑 adone install --hooks-only --force，再跑 adone gate run（全量）。"}'
 else
   printf '%s\n' '{}'
 fi

@@ -32,6 +32,16 @@ class TestGoAdapter(ProjectCase):
         names = GoAdapter(self.root).test_names([self.root / "internal"])
         self.assertEqual(names, {"TestAdd", "TestNoAssert", "TestSkipped"})
 
+    def test_related_tests按实现文件找同stem测试(self):
+        self.make_go_project()
+        ad = GoAdapter(self.root)
+        names = ad.related_tests(["internal/calc.go"])
+        self.assertEqual(set(names), {"TestAdd", "TestNoAssert", "TestSkipped"})
+        argv = ad.related_test_argv(names)
+        self.assertIn("-run", argv)
+        self.assertTrue(any("TestAdd" in a for a in argv))
+        self.assertEqual(ad.related_tests(["internal/orphan.go"]), [])
+
     def test_无断言用例能被认出来(self):
         self.make_go_project()
         ad = GoAdapter(self.root)
@@ -66,6 +76,12 @@ class TestNodeAdapter(ProjectCase):
         self.assertEqual(ad.test_names([self.root / "src"]), {"拒绝负数价格"})
         self.assertEqual(ad.views(self.root / "src"), {"OrderView.vue"})
 
+    def test_related_tests按同stem的test文件(self):
+        self.make_node_project()
+        ad = NodeAdapter(self.root)
+        self.assertEqual(ad.related_tests(["src/order.ts"]), ["拒绝负数价格"])
+        self.assertEqual(ad.related_tests(["src/missing.ts"]), [])
+
     def test_读lcov算零覆盖函数(self):
         p = self.write("cov/lcov.info", "\n".join([
             "SF:src/a.ts", "FN:1,foo", "FN:9,bar", "FNDA:3,foo", "FNDA:0,bar",
@@ -86,6 +102,15 @@ class TestPythonAdapter(ProjectCase):
         p = self.write("m.py", "def f():\n    a = 1\n    return a\n\ndef g():\n    pass\n")
         funcs = {f.name: f.body for f in PythonAdapter(self.root).iter_funcs(p)}
         self.assertEqual(funcs["f"], ["a = 1", "return a"])
+
+    def test_related_tests按test前缀配对(self):
+        self.write("lib.py", "def add(a, b):\n    return a + b\n")
+        self.write("test_lib.py", "def test_add():\n    assert True\n")
+        ad = PythonAdapter(self.root)
+        self.assertEqual(ad.related_tests(["lib.py"]), ["test_add"])
+        argv = ad.related_test_argv(["test_add"])
+        self.assertIn("-k", argv)
+        self.assertEqual(ad.related_tests(["other.py"]), [])
 
 
 class TestJavaAdapter(ProjectCase):
@@ -132,6 +157,16 @@ class TestJavaAdapter(ProjectCase):
         res = JavaAdapter(self.root).parse_test_run(
             "BUILD SUCCESSFUL\n", cwd=self.root, since=1_700_000_000)
         self.assertFalse(res.parsed)
+
+    def test_related_tests实现对上Test后缀类(self):
+        self.make_maven_project()
+        ad = JavaAdapter(self.root)
+        self.assertIn("CalcTest", ad.related_tests(["src/main/java/com/example/Calc.java"]))
+        self.assertIn("CalcTest", ad.related_tests(
+            ["src/test/java/com/example/CalcTest.java"]))
+        argv = ad.related_test_argv(["CalcTest", "OtherTest"])
+        self.assertTrue(any(a.startswith("-Dtest=") and "CalcTest" in a for a in argv), argv)
+        self.assertEqual(ad.related_tests(["src/main/java/com/example/Orphan.java"]), [])
 
     def test_源码与XML的名字形式一致且含DisplayName(self):
         self.make_maven_project()
@@ -297,6 +332,15 @@ class TestCppAdapter(ProjectCase):
         self.make_cmake_project()
         names = CppAdapter(self.root).test_names([self.root / "tests"])
         self.assertEqual(names, {"Calc.Add", "Calc.NoAssert", "catch-add"})
+
+    def test_related_tests按stem对上测试文件(self):
+        self.make_cmake_project()
+        ad = CppAdapter(self.root)
+        names = set(ad.related_tests(["src/calc.cpp"]))
+        self.assertTrue({"Calc.Add", "Calc.NoAssert"} <= names)
+        argv = ad.related_test_argv(sorted(names))
+        self.assertIn("-R", argv)
+        self.assertEqual(ad.related_tests(["src/orphan.cpp"]), [])
 
     def test_无断言与跳过(self):
         self.make_cmake_project()

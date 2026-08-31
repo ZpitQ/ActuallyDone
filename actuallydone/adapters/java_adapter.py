@@ -10,7 +10,8 @@ from pathlib import Path
 
 from ..model import FuncBody, TestResult
 from .base import (CAP_COVERAGE, CAP_FUNCS, CAP_ROUTES, CAP_SINGLE_TEST,
-                   CAP_TESTS, CAP_VIEWS, Adapter, brace_funcs, read)
+                   CAP_TESTS, CAP_VIEWS, Adapter, brace_funcs, companion_stems,
+                   read)
 
 # Maven 每个测试类打一行「Tests run: … -- in <类>」，Results: 段再打一行合计。
 # 聚合行的判据是后面没有 - in / -- in；认错就把最后一个类的数字当全局合计。
@@ -389,6 +390,48 @@ class JavaAdapter(Adapter):
             return [*self._mvn_cmd(base), "test", f"-Dtest={sel}", "-DfailIfNoTests=false"]
         sel = f"*.{cls}.{method}" if precise else f"*.{cls}"
         return [*self._gradle_cmd(base), "cleanTest", "test", "--tests", sel]
+
+    def related_tests(self, rel_paths: list[str]) -> list[str] | None:
+        by_stem: dict[str, list[Path]] = {}
+        for p in self.test_files([self.root]):
+            by_stem.setdefault(p.stem, []).append(p)
+        names: list[str] = []
+        for rel in rel_paths:
+            p = self.root / rel
+            if p.suffix not in self.source_exts:
+                continue
+            if _is_test_stem(p.stem):
+                names.extend(self._class_names(p if p.is_file() else None, p.stem))
+                continue
+            for cand in companion_stems(p.stem):
+                for tp in by_stem.get(cand, []):
+                    names.extend(self._class_names(tp, tp.stem))
+        return sorted(set(names))
+
+    def _class_names(self, path: Path | None, fallback: str) -> list[str]:
+        if path is None or not path.is_file():
+            return [fallback] if fallback else []
+        classes = [cls for cls, *_ in self._scan_test_methods(path)]
+        return classes or [path.stem]
+
+    def related_test_argv(self, names: list[str]) -> list[str] | None:
+        classes: list[str] = []
+        seen: set[str] = set()
+        for n in names:
+            cls = (n.split("#", 1)[0] if "#" in n else n).strip()
+            if cls and cls not in seen:
+                seen.add(cls)
+                classes.append(cls)
+        if not classes:
+            return None
+        base = self.root
+        if self._build_tool(base) == "maven":
+            return [*self._mvn_cmd(base), "test",
+                    f"-Dtest={','.join(classes)}", "-DfailIfNoTests=false"]
+        argv = [*self._gradle_cmd(base), "cleanTest", "test"]
+        for cls in classes:
+            argv.extend(["--tests", f"*.{cls}"])
+        return argv
 
     def iter_test_funcs(self, path: Path) -> list[FuncBody]:
         wanted = {name for _, name, _, _ in self._scan_test_methods(path)}

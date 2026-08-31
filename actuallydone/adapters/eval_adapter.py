@@ -78,6 +78,24 @@ class EvalAdapter(Adapter):
             return None
         return list(argv) + ["--only", name]
 
+    def related_tests(self, rel_paths: list[str]) -> list[str] | None:
+        names: list[str] = []
+        for rel in rel_paths:
+            p = self.root / rel
+            parts = Path(rel.replace("\\", "/")).parts
+            if p.suffix == ".toml" and "eval" in parts and p.is_file():
+                names.extend(sc["id"] for sc in self._scenarios(p))
+        return sorted(set(names))
+
+    def related_test_argv(self, names: list[str]) -> list[str] | None:
+        argv = self._configured_argv()
+        if not argv or not names:
+            return None
+        out = list(argv)
+        for n in names:
+            out.extend(["--only", n])
+        return out
+
     def iter_test_funcs(self, path: Path) -> list[FuncBody]:
         out: list[FuncBody] = []
         for i, sc in enumerate(self._scenarios(path), 1):

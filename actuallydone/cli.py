@@ -1,7 +1,7 @@
 """命令行入口。
 
 子命令里的重活都是懒导入的：`adone init` 不该因为健康度维度里某个模块出问题而起不来，
-而且钩子每次会话都要跑 `gate check`，启动时间是要计较的。
+而且钩子每次会话都可能被拉起，启动时间是要计较的。
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from pathlib import Path
 from . import __version__
 from .config import Config, ConfigError
 
-HOOK_STEMS = ("mark-dirty", "gate-guard")
+HOOK_STEMS = ("mark-dirty", "gate-guard", "commit-guard")
 
 
 def _cfg(args) -> Config:
@@ -39,6 +39,9 @@ def cmd_doctor(args) -> int:
 
 
 def cmd_gate_run(args) -> int:
+    if getattr(args, "changed", False):
+        from .changed import cmd_run_changed
+        return cmd_run_changed(_cfg(args))
     from .gate import run_gate
     return run_gate(_cfg(args), skip=args.skip or [])
 
@@ -149,6 +152,8 @@ def build_parser() -> argparse.ArgumentParser:
     g = gsub.add_parser("run", help="跑全量门禁并写回执")
     g.add_argument("--skip", action="append", metavar="步骤名",
                    help="跳过某一步（回执会被标记为不完整，check 仍会拒绝）")
+    g.add_argument("--changed", action="store_true",
+                   help="只跑与 dirty / git diff 相关的用例，写 partial.json，不覆盖 latest.json")
     g.set_defaults(func=cmd_gate_run)
 
     g = gsub.add_parser("check", help="校验回执是否新鲜且全绿")
@@ -233,8 +238,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_install)
 
     p = sub.add_parser("hook", help="给 Cursor 钩子调用：逻辑在包里，不在 .cursor/hooks/*.py")
-    p.add_argument("hook", choices=["mark-dirty", "gate-guard"],
-                   help="afterFileEdit 用 mark-dirty，stop 用 gate-guard")
+    p.add_argument("hook", choices=["mark-dirty", "gate-guard", "commit-guard"],
+                   help="afterFileEdit 用 mark-dirty，stop 用 gate-guard，"
+                        "beforeShellExecution 用 commit-guard")
     p.set_defaults(func=cmd_hook)
 
     p = sub.add_parser("upgrade", help="从 GitHub 拉最新版并覆盖当前安装")
