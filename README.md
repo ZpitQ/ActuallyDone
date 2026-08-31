@@ -118,7 +118,9 @@ adone health --open                # 出一页健康度报告并打开
   adone/acceptance/*.toml    # 验收契约，入库
   adone/requirements/*.toml  # 需求台账，入库
   .adone/                    # 机器写的状态
-    latest.json  receipts/   # 回执
+    latest.json  receipts/   # 全量回执（完成证据只认 latest.json）
+    partial.json             # --changed 的调试产物，不是完成证据
+    dirty                    # afterFileEdit 记下的受监视改动
     chain.json               # 回执链头（建议入库）
     test-baseline.json       # 假绿基线（建议入库）
     policy-baseline.json     # 判据基线（建议入库）
@@ -126,6 +128,7 @@ adone health --open                # 出一页健康度报告并打开
     report.html              # 健康度报告
   .cursor/skills/            # adone install 渲染
   .cursor/hooks.json         # 钩子登记（按本机生成，见下）
+  .git/hooks/pre-commit      # 本机生成，不入库：回执不新鲜时跑全量 gate run
 ```
 
 `.gitignore` 建议这样写（**不要写 `.adone/`**，否则后面的 `!` 全部失效且不报错）：
@@ -140,18 +143,101 @@ adone health --open                # 出一页健康度报告并打开
 ### 钩子：按操作系统在本机装
 
 `hooks.json` 的 `command` 是安装那台机器写的，**不要把别人的登记当通用配置提交。**
+`.git/hooks/pre-commit` 同样是本机生成物，不要入库。
 
 | 系统 | 登记的 command | 本机还要有 |
 | --- | --- | --- |
 | macOS / Linux | `python3 -m actuallydone hook …` | PATH 里有 `python3` 和 `adone`；不写 `.cmd` / `.exe` |
-| Windows | `.cursor/hooks/gate-guard.exe` | 安装时复制的本机 `adone.exe`（不要提交）；`.cmd` 只给手跑 |
+| Windows | `.cursor/hooks/<名>.exe` | 安装时复制的本机 `adone.exe`（不要提交）；`.cmd` 只给手跑 |
+
+会登记三条钩子：`mark-dirty`（`afterFileEdit`）、`gate-guard`（`stop`）、
+`commit-guard`（`beforeShellExecution` 命中 `git commit`）。用法见下一节。
 
 Windows 上升完必须 `adone install --hooks-only --force`，然后确认 command 是 `.exe`，
 新开一轮 Agent 对话后 `.adone\hook.log` 里应出现 `mark-dirty launched`。
 
 <br/><br/>
 
-## 5. 如何初始化门禁
+## 5. 如何在开发中跑相关用例、提交时才全量
+
+`adone.toml` 里的 `[[gate.step]]` **不用改**：全量命令仍是 `mvn test` / `go test ./...`。
+开发中不走那条 argv（判据锁会把「换命令」判成放松）。相关用例由适配器另组一条临时命令。
+
+### 两条命令
+
+| 时机 | 命令 | 写 `latest.json`？ |
+| --- | --- | --- |
+| 改了受监视文件之后（人或 Agent 手跑；`stop` 钩子也会跑） | `adone gate run --changed` | 否，只写 `.adone/partial.json` |
+| 宣称完成、交付、`git commit` | `adone gate run` | 是，完成证据只认这份 |
+| 随时复核全量回执是否新鲜 | `adone gate check` | 否，约 1 秒 |
+
+```bash
+adone gate run --changed   # 只跑与 dirty / git diff 相关的用例
+adone gate run             # 全量，写回执
+adone gate check           # 树哈希必须对上 latest.json
+```
+
+`--changed` 的文件名单：先读 `.adone/dirty`；没有再退到 `git diff --name-only HEAD`
+（人在 IDE 里改、钩子没记下时）。
+
+### 钩子怎么触发（装上才会有）
+
+```bash
+adone install --with-hooks          # 技能 + hooks.json + 本机 pre-commit
+adone install --hooks-only --force  # 升完 adone 或换了钩子口径时重渲
+```
+
+| 事件 | 钩子 | 做什么 |
+| --- | --- | --- |
+| `afterFileEdit` | `mark-dirty` | 受监视文件写入 `.adone/dirty` |
+| `stop`（每轮 Agent 说完） | `gate-guard` | dirty **空**：不回推（问答、读代码走这条，即使回执过期）。dirty **非空**：跑 `--changed`，失败才回推，文案里禁止叫全量 `gate run` |
+| `beforeShellExecution` 命中 `git commit` | `commit-guard` | 先 `gate check`；全量回执对不上则 `deny`（`--no-verify` 也拦） |
+| 本机 `git commit` | `.git/hooks/pre-commit` | 回执已新鲜则放行，否则跑全量 `gate run`，失败拒绝提交 |
+
+`stop` 的 `status=completed` 只表示「这轮说完了」，不是用户说「做完了」。
+「完成 / 可交付」仍然只认全量回执，那是 `gate check` / 提交时的事。
+
+`sessionStart` 上也挂了 `mark-dirty`，但没有 `file_path`，不会误写 dirty。
+
+### 相关用例怎么找
+
+第一期是文件名启发式，不做调用图。适配器实现 `related_tests`：
+
+- 改的是测试文件：跑该文件里的用例。
+- 改的是实现：同 stem + `Test` / `_test` / `test_`。  
+  `PetStore.java` → `PetStoreTest`；`foo.go` → `foo_test.go` 里的 `Test*`；  
+  `lib.py` → `test_lib.py` / `lib_test.py`；`store.cpp` → 测到该 stem 的 `Suite.Case`。
+- 拼命令：Java `-Dtest=ATest,BTest`，Go `-run`，Python `-k`，C++ `ctest -R`。
+- 映射为空：回推「找不到与这些文件相关的用例，写一条再继续」，**不退回全量**。
+- 适配器不会找（返回未评估）：同样不空跑冒充绿。
+
+通过后清掉 dirty，避免下一轮问答再跑一遍。找不到或跑失败则留下 dirty，下一轮 `stop` 还会拦。
+
+不需要在 `adone.toml` 里另配增量步骤。也不要在 `afterFileEdit` 里跑测试（每存一次文件就起 JVM）。
+
+### 人怎么用
+
+日常改代码：存盘即可。Agent 回合结束时若改了受监视文件，钩子会跑相关用例。
+自己想先看结果：
+
+```bash
+adone gate run --changed
+```
+
+准备提交或宣称完成：
+
+```bash
+adone gate run
+adone gate check
+git commit
+```
+
+人在终端 `git commit` 会撞上 pre-commit；Agent 跑 `git commit` 会先撞上
+`commit-guard`，过了再走 pre-commit。两条都装，`--no-verify` 也绕不过 Cursor 那条。
+
+<br/><br/>
+
+## 6. 如何初始化门禁
 
 `adone init` 会按仓库里的标志文件生成步骤。也可以手写 `adone.toml`。
 
@@ -307,11 +393,13 @@ adone doctor
 adone gate run
 ```
 
-`doctor` 核命令找不找得到；`gate run` 真跑并写出第一份回执。
+`doctor` 核命令找不找得到；`gate run` 真跑并写出第一份**全量**回执。
+日常改动用 `adone gate run --changed`，见第 5 节。不要把全量 `argv` 改成只跑一条——
+那是放松判据，要 `policy --accept`。
 
 <br/><br/>
 
-## 6. 如何更新 / 重置基线
+## 7. 如何更新 / 重置基线
 
 基线有两份，都只报**放松**，收紧只提示。确属合理的放宽，必须写理由记账。
 
@@ -335,7 +423,7 @@ adone policy --accept "把 go vet 并进 build 步骤，命令因此变了"
 
 <br/><br/>
 
-## 7. 如何启用新 Agent 做独立审计
+## 8. 如何启用新 Agent 做独立审计
 
 实现者和复核者要分开：换一个会话，最好换一个模型。不要把实现过程贴给复核者。
 
@@ -366,7 +454,7 @@ adone audit report --open    # 已有 audit.json 时只出 HTML
 
 <br/><br/>
 
-## 8. 如何生成健康报告，以及怎么读
+## 9. 如何生成健康报告，以及怎么读
 
 ```bash
 adone health                 # 读已有回执，秒级
@@ -401,7 +489,7 @@ macOS 用 `open`，Linux 用 `xdg-open`，Windows 用系统关联打开。
 
 <br/><br/>
 
-## 9. Q&A
+## 10. Q&A
 
 **Q：`adone` 敲不出来？**  
 A：Windows / Linux 都要把 pipx 的 bin 加进 PATH（`~/.local/bin` 或 `%USERPROFILE%\.local\bin`）。
@@ -456,10 +544,8 @@ A：新接入一门生态用 `adone detect --merge`。不要用 `--write` 覆盖
 <br/>
 
 **Q：问一句设计、没改代码，也被推去跑全量测试？**  
-A：那是 1.3.14 之前的设计：把每一轮 `stop` 当成「宣称完成」。现在 dirty 为空就不回推；
-有 dirty 只跑 `adone gate run --changed`。全量是 `git commit`（人与 Agent 都会走
-pre-commit / `beforeShellExecution`）或你自己宣称完成时才跑。升完要
-`adone install --hooks-only --force`。
+A：那是 1.3.14 之前的设计：把每一轮 `stop` 当成「宣称完成」。现在的配置和用法见第 5 节。
+升完要 `adone install --hooks-only --force`，否则项目里还是旧钩子。
 
 <br/>
 
