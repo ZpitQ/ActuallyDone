@@ -158,6 +158,21 @@ def run_step(cfg: Config, spec: dict) -> Step:
     return st
 
 
+def _fold_test_result(acc: TestResult | None, res: TestResult) -> TestResult:
+    """多步测试时保留通过人数更多的那份计数，并把各步的通过名单并起来。
+
+    名单合并是为了让 eval 场景名和 Java/Go 用例名能写进同一份回执；
+    单步项目的计数与以前完全一样。
+    """
+    if acc is None:
+        return res
+    keep, other = (res, acc) if res.passed > acc.passed else (acc, res)
+    keep.passed_names = sorted(set(keep.passed_names) | set(other.passed_names))
+    keep.failed_names = sorted(set(keep.failed_names) | set(other.failed_names))
+    keep.skipped_names = sorted(set(keep.skipped_names) | set(other.skipped_names))
+    return keep
+
+
 def judge_step(cfg: Config, spec: dict, st: Step) -> TestResult | None:
     """按 kind 做额外判定。光看退出码会漏掉两类最常见的假绿。"""
     kind = spec.get("kind", "")
@@ -239,8 +254,7 @@ def execute_steps(cfg: Config, skip: list[str] | None = None) -> dict:
         st = run_step(cfg, spec)
         res = judge_step(cfg, spec, st)
         if res is not None and res.parsed:
-            if tests is None or res.passed > tests.passed:
-                tests = res
+            tests = _fold_test_result(tests, res)
             if res.coverage is not None:
                 coverage_any = res.coverage
                 if not test_step_name or test_step_name == name:

@@ -1,0 +1,4 @@
+id = "recall#退货时效"
+kind = "recall"
+query = "退货多久能到账"
+must = ["退货时效"]

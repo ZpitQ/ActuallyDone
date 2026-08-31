@@ -21,8 +21,28 @@ DOC_THRESHOLD_RE = re.compile(r"(?:≥|>=|不低于|下限|基线)\s*(\d{2}(?:\.
 HARNESS_NAMES = {"TestMain", "setUpModule", "tearDownModule"}
 
 
+def _scan_adapter(cfg: Config, ad, roots: list[Path], exempt: set[str],
+                  funcs: dict[str, str], skip_sites: dict[str, int],
+                  assertionless: list[str]) -> None:
+    for p in ad.test_files(roots):
+        try:
+            rel = p.relative_to(cfg.root).as_posix()
+        except ValueError:
+            rel = p.as_posix()
+        text = p.read_text(encoding="utf-8", errors="replace")
+        n = ad.skip_sites(text)
+        if n:
+            skip_sites[rel] = skip_sites.get(rel, 0) + n
+        for fn in ad.iter_test_funcs(p):
+            if fn.name in HARNESS_NAMES or fn.name in exempt:
+                continue
+            funcs[fn.name] = rel
+            if ad.is_assertionless(fn.body) and fn.name not in assertionless:
+                assertionless.append(fn.name)
+
+
 def scan(cfg: Config) -> dict:
-    from .adapters import get
+    from .adapters import get, has_eval_step
     ad = get(cfg.get("tests.adapter") or "", cfg.root)
     roots = [cfg.root / r for r in (cfg.get("tests.roots", []) or [])]
     exempt = set(cfg.get("tests.baseline_exempt", []) or [])
@@ -30,18 +50,11 @@ def scan(cfg: Config) -> dict:
     funcs: dict[str, str] = {}
     skip_sites: dict[str, int] = {}
     assertionless: list[str] = []
-    for p in ad.test_files(roots):
-        rel = p.relative_to(cfg.root).as_posix()
-        text = p.read_text(encoding="utf-8", errors="replace")
-        n = ad.skip_sites(text)
-        if n:
-            skip_sites[rel] = n
-        for fn in ad.iter_test_funcs(p):
-            if fn.name in HARNESS_NAMES or fn.name in exempt:
-                continue
-            funcs[fn.name] = rel
-            if ad.is_assertionless(fn.body):
-                assertionless.append(fn.name)
+    _scan_adapter(cfg, ad, roots, exempt, funcs, skip_sites, assertionless)
+    # 无 eval 步则完全走 tests.adapter；有才额外合并场景名
+    if has_eval_step(cfg) and ad.name != "eval":
+        ev = get("eval", cfg.root)
+        _scan_adapter(cfg, ev, roots, exempt, funcs, skip_sites, assertionless)
     return {
         "test_functions": funcs,
         "skip_sites": skip_sites,
@@ -131,9 +144,9 @@ def write_baseline(cfg: Config, cur: dict, reason: str) -> None:
 
 def integrity_problems(cfg: Config, receipt: dict | None) -> list[str]:
     """给 gate check 与健康度维度共用：返回阻断项列表。"""
-    from .adapters import CAP_TESTS, get
+    from .adapters import CAP_TESTS, get, has_eval_step
     ad = get(cfg.get("tests.adapter") or "", cfg.root)
-    if CAP_TESTS not in ad.caps:
+    if CAP_TESTS not in ad.caps and not has_eval_step(cfg):
         return []  # 这个生态列不出用例，假绿检测无从谈起（维度里会标未评估）
 
     cur = scan(cfg)

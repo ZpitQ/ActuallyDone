@@ -1,0 +1,57 @@
+{
+  "created_at": "2026-08-31T13:33:57",
+  "reason": "首次建立（由 gate run 自动记账）",
+  "hash": "80abe2dd74f972a91ad739a56ed6da2745139d79de5b6ebf5a637ec0f3caea9c",
+  "snapshot": {
+    "watch_roots": [
+      ".cursor/skills",
+      "adone/eval"
+    ],
+    "watch_exts": [
+      ".md",
+      ".toml"
+    ],
+    "min_tree_files": 5,
+    "steps": [
+      {
+        "name": "skill eval",
+        "kind": "test",
+        "adapter": "eval",
+        "cwd": ".",
+        "argv": [
+          "python3",
+          "scripts/eval_cs_agent.py"
+        ],
+        "invalid_marks": [],
+        "script": null
+      }
+    ],
+    "coverage_threshold": null,
+    "coverage_source": "skill eval",
+    "tests_adapter": "eval",
+    "tests_roots": [
+      "adone/eval"
+    ],
+    "baseline_exempt": [],
+    "checks": {
+      "consistency.pair": 0,
+      "docs.required": 1,
+      "docs.excerpt": 0,
+      "docs.claim": 0,
+      "code.unused": 0,
+      "probe": 0
+    },
+    "contracts": {
+      "adone/acceptance/cs-eval.toml": {
+        "items": 5,
+        "tests": [
+          "",
+          "",
+          "",
+          "",
+          ""
+        ]
+      }
+    }
+  }
+}

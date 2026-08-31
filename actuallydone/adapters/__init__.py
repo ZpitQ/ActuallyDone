@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .base import (CAP_COVERAGE, CAP_FUNCS, CAP_ROUTES, CAP_SINGLE_TEST,
                    CAP_TABLES, CAP_TESTS, CAP_VIEWS, Adapter)
+from .eval_adapter import EvalAdapter, first_eval_step, has_eval_step
 from .go_adapter import GoAdapter
 from .java_adapter import JavaAdapter
 from .node_adapter import NodeAdapter
@@ -21,11 +22,13 @@ REGISTRY: dict[str, type[Adapter]] = {
     "java": JavaAdapter,
     "node": NodeAdapter,
     "python": PythonAdapter,
+    "eval": EvalAdapter,
     "generic": Adapter,
 }
 
 __all__ = ["REGISTRY", "get", "detect_all", "Adapter", "CAP_TESTS", "CAP_COVERAGE",
-           "CAP_FUNCS", "CAP_ROUTES", "CAP_TABLES", "CAP_VIEWS", "CAP_SINGLE_TEST"]
+           "CAP_FUNCS", "CAP_ROUTES", "CAP_TABLES", "CAP_VIEWS", "CAP_SINGLE_TEST",
+           "has_eval_step", "first_eval_step"]
 
 
 def get(name: str, root: Path) -> Adapter:
@@ -37,7 +40,8 @@ def detect_all(root: Path) -> dict[str, list[str]]:
     """返回 {生态名: [命中的标志文件]}，只含命中的。"""
     out: dict[str, list[str]] = {}
     for name, cls in REGISTRY.items():
-        if name == "generic":
+        # eval 没有标志文件，也不参与生态探测，避免被选成 tests.adapter
+        if name in ("generic", "eval"):
             continue
         hits = cls.detect(root)
         if hits:

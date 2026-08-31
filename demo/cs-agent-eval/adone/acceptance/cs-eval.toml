@@ -1,0 +1,21 @@
+task = "客服场景门禁"
+
+[[item]]
+"要求" = "问退货时效必须召回对应知识块"
+scenario = "recall#退货时效"
+
+[[item]]
+"要求" = "问退货时效不得误召运费险"
+scenario = "recall#禁中运费险"
+
+[[item]]
+"要求" = "两块退款政策冲突时取更严的一块"
+scenario = "merge#冲突取严"
+
+[[item]]
+"要求" = "高额退款必须打断人工"
+scenario = "hitl#高额退款打断"
+
+[[item]]
+"要求" = "查物流禁止打断"
+scenario = "hitl#查物流禁止打断"

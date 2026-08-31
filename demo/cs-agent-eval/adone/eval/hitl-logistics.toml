@@ -1,0 +1,4 @@
+id = "hitl#查物流禁止打断"
+kind = "hitl"
+query = "快递到哪了"
+expect_interrupt = false

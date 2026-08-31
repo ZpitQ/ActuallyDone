@@ -34,6 +34,26 @@ def known_test_names(cfg: Config) -> set[str] | None:
     return ad.test_names(roots)
 
 
+def known_scenario_names(cfg: Config) -> set[str] | None:
+    """第一个 adapter=eval 的步骤能列出的场景名。没有该步骤则无法核验。"""
+    from .adapters import first_eval_step, get
+    if first_eval_step(cfg) is None:
+        return None
+    ad = get("eval", cfg.root)
+    roots = [cfg.root / r for r in (cfg.get("tests.roots", []) or [])]
+    return ad.test_names(roots)
+
+
+def _has_test_binding(contracts: list[tuple[Path, dict]]) -> bool:
+    for _, data in contracts:
+        if "__error__" in data:
+            continue
+        for item in data.get("item") or []:
+            if item.get("test"):
+                return True
+    return False
+
+
 def check_contracts(cfg: Config, receipt: dict | None) -> list[str]:
     """返回问题列表，空列表表示契约全绿。"""
     problems: list[str] = []
@@ -42,7 +62,7 @@ def check_contracts(cfg: Config, receipt: dict | None) -> list[str]:
         return problems
 
     known = known_test_names(cfg)
-    if known is None:
+    if _has_test_binding(contracts) and known is None:
         return [f"有 {len(contracts)} 份验收契约，但配置的测试适配器"
                 f"（tests.adapter={cfg.get('tests.adapter') or '空'}）列不出用例名，"
                 f"无法核验。先把 tests.adapter / tests.roots 配对"]
@@ -63,23 +83,43 @@ def check_contracts(cfg: Config, receipt: dict | None) -> list[str]:
         for i, item in enumerate(items, 1):
             want = item.get("要求") or item.get("requirement") or f"第 {i} 条"
             test = item.get("test")
+            scenario = item.get("scenario")
             impl = item.get("impl")
-            if not test:
-                problems.append(f"{rel} 第 {i} 条「{want}」：没绑定用例名")
-                continue
-            if test not in known:
-                problems.append(
-                    f"{rel} 第 {i} 条「{want}」：用例 {test} 在测试源码里根本不存在")
-                continue
-            if receipt is None:
-                problems.append(f"{rel} 第 {i} 条「{want}」：没有回执可以证明 {test} 跑过")
-                continue
-            if test not in passed_top:
-                problems.append(
-                    f"{rel} 第 {i} 条「{want}」：用例 {test} 没有出现在回执的通过名单里")
+            prefix = f"{rel} 第 {i} 条「{want}」"
+            if test:
+                # 同时有 test 与 scenario 时以 test 为准，vibe 契约判定顺序不变
+                if known is None or test not in known:
+                    problems.append(
+                        f"{prefix}：用例 {test} 在测试源码里根本不存在")
+                    continue
+                if receipt is None:
+                    problems.append(f"{prefix}：没有回执可以证明 {test} 跑过")
+                    continue
+                if test not in passed_top:
+                    problems.append(
+                        f"{prefix}：用例 {test} 没有出现在回执的通过名单里")
+                    continue
+            elif scenario:
+                scenarios = known_scenario_names(cfg)
+                if scenarios is None:
+                    problems.append(f"{prefix}：未配置 eval 步骤，scenario 无法核验")
+                    continue
+                if scenario not in scenarios:
+                    problems.append(
+                        f"{prefix}：场景 {scenario} 在 eval 名单里根本不存在")
+                    continue
+                if receipt is None:
+                    problems.append(f"{prefix}：没有回执可以证明 {scenario} 跑过")
+                    continue
+                if scenario not in passed and scenario not in passed_top:
+                    problems.append(
+                        f"{prefix}：场景 {scenario} 没有出现在回执的通过名单里")
+                    continue
+            else:
+                problems.append(f"{prefix}：没绑定用例名")
                 continue
             if impl:
-                problems.extend(check_impl_ref(cfg, f"{rel} 第 {i} 条「{want}」", impl))
+                problems.extend(check_impl_ref(cfg, prefix, impl))
     return problems
 
 

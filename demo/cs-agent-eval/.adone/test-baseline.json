@@ -1,0 +1,15 @@
+{
+  "created_at": "2026-08-31T13:34:00",
+  "reason": "建立初始基线",
+  "coverage_threshold": null,
+  "runtime_skips": 0,
+  "test_functions": {
+    "hitl#查物流禁止打断": "adone/eval/hitl-logistics.toml",
+    "hitl#高额退款打断": "adone/eval/hitl-refund.toml",
+    "merge#冲突取严": "adone/eval/merge-conflict.toml",
+    "recall#禁中运费险": "adone/eval/recall-forbid.toml",
+    "recall#退货时效": "adone/eval/recall-must.toml"
+  },
+  "skip_sites": {},
+  "assertionless": []
+}

@@ -1,0 +1,4 @@
+id = "recall#禁中运费险"
+kind = "recall"
+query = "退货多久能到账"
+must_not = ["运费险"]

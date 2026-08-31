@@ -1,6 +1,6 @@
 # ActuallyDone
 
-当前版本 **v1.3.11**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.12**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
@@ -240,6 +240,28 @@ pom 里用 `systemPropertyVariables` 把这些 `-D` 转进测试 JVM；不要用
 
 多模块项目的覆盖率按各模块行数相加；有 `jacoco-aggregate` 时只认聚合报告。
 配置里写 `mvn` / `./mvnw` 即可，Windows 上会自动对上 `mvn.cmd` / `mvnw.cmd`。
+
+### 场景门禁（可选）
+
+客服 / Agent 图这类项目可以**另外**加一步 `adapter = "eval"`，用场景金标挡召回漏检、
+多块乱合并、该打断没打断。这是 opt-in：Java / Go / Python / Node 的 vibe coding
+**不用改**。`adone init` 看见 skill 目录或 LangGraph **不会**自动加这一步，也不会
+把 `.md` 加进默认 `watch_exts`。
+
+```toml
+[[gate.step]]
+name = "skill eval"
+kind = "test"
+adapter = "eval"
+argv = ["python3", "scripts/eval_cs_agent.py"]
+```
+
+适配器认 stdout 里的 `PASS <id>` / `FAIL <id>` / `SKIP <id>`（id 可以是 `recall#退货时效`）。
+契约用 `scenario =` 绑场景名；只有 `test =` 的条目仍走原来的用例名单。
+假绿检测也只在存在 eval 步骤时才把 `adone/eval/*.toml` 算进基线——删场景文件等于删用例。
+
+演示见 `demo/cs-agent-eval`（内存客服，零 LangGraph 依赖）。Java / Go 项目不要抄
+它的 `watch_roots`，除非你真的要盯 skill 文本。
 
 生成或改完配置后：
 

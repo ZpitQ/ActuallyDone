@@ -2,6 +2,13 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.12 — 2026-08-31
+
+- **可选场景门禁**：新增 `adapter = "eval"`（无探测标志，不会被 `adone init` 选中）。
+  解析 `PASS` / `FAIL` / `SKIP` 行；契约可绑 `scenario`；仅当存在 eval 步骤时
+  integrity 才把 `adone/eval` 场景算进基线。Java / Go / Python / Node 默认路径不变。
+- **演示**：`demo/cs-agent-eval`（内存客服召回 / 合并 / HITL，无 LangGraph 依赖）。
+
 ## v1.3.11 — 2026-08-28
 
 - **三系统适配**：init / install / gate / audit / upgrade / 钩子按本机环境分支。

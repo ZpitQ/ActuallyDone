@@ -1,0 +1,5 @@
+id = "hitl#高额退款打断"
+kind = "hitl"
+query = "我要退款 5000 元"
+amount = 5000
+expect_interrupt = true

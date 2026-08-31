@@ -1,0 +1,4 @@
+id = "merge#冲突取严"
+kind = "merge"
+query = "退款怎么走"
+expect = "退款政策A"
