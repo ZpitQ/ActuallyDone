@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .base import (CAP_COVERAGE, CAP_FUNCS, CAP_ROUTES, CAP_SINGLE_TEST,
                    CAP_TABLES, CAP_TESTS, CAP_VIEWS, Adapter)
+from .cpp_adapter import CppAdapter
 from .eval_adapter import EvalAdapter, first_eval_step, has_eval_step
 from .go_adapter import GoAdapter
 from .java_adapter import JavaAdapter
@@ -22,6 +23,7 @@ REGISTRY: dict[str, type[Adapter]] = {
     "java": JavaAdapter,
     "node": NodeAdapter,
     "python": PythonAdapter,
+    "cpp": CppAdapter,
     "eval": EvalAdapter,
     "generic": Adapter,
 }

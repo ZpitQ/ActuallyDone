@@ -88,7 +88,7 @@ def detect(root: Path) -> Detected:
 
     if not got.ecosystems:
         got.notes.append("一个生态都没认出来（找不到 go.mod / package.json / "
-                         "pyproject.toml / pom.xml / build.gradle）："
+                         "pyproject.toml / pom.xml / build.gradle / CMakeLists.txt）："
                          "门禁步骤要手工填")
     return got
 

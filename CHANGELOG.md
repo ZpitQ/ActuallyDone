@@ -2,6 +2,13 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.13 — 2026-08-31
+
+- **C++ 适配器**：认 `CMakeLists.txt` / `meson.build`。CMake 步骤同一份 argv
+  覆盖 Windows（`cmake.exe` + Visual Studio `--config` / `ctest -C`）、macOS 与
+  Linux（Ninja / Makefiles）。解析 GoogleTest / CTest / Catch2；覆盖率认 lcov。
+- **演示**：`demo/task-store-cpp`（C++17 内存任务清单，零 GoogleTest 依赖）。
+
 ## v1.3.12 — 2026-08-31
 
 - **可选场景门禁**：新增 `adapter = "eval"`（无探测标志，不会被 `adone init` 选中）。

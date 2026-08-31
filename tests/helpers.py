@@ -142,6 +142,47 @@ JAVA_JACOCO_XML = '''<?xml version="1.0" encoding="UTF-8"?>
 '''
 
 
+CPP_CALC_TEST = '''#include "gtest/gtest.h"
+
+TEST(Calc, Add) {
+    ASSERT_EQ(3, add(1, 2));
+}
+
+TEST(Calc, NoAssert) {
+    add(1, 2);
+}
+
+TEST_CASE("catch-add") {
+    REQUIRE(add(1, 2) == 3);
+}
+'''
+
+GTEST_TEST_OUTPUT = """[ RUN      ] Calc.Add
+[       OK ] Calc.Add (0 ms)
+[ RUN      ] Calc.Sub
+[  FAILED  ] Calc.Sub (1 ms)
+[  SKIPPED ] Calc.Skip
+[  PASSED  ] 1 test.
+"""
+
+CTEST_TEST_OUTPUT = """
+1/3 Test #1: Calc.Add .......................   Passed    0.01 sec
+2/3 Test #2: Calc.Sub .......................***Failed    0.02 sec
+3/3 Test #3: Calc.Skip ......................***Skipped   0.00 sec
+"""
+
+CPP_LCOV = """TN:
+SF:src/store.cpp
+FN:8,add
+FN:29,complete
+FNDA:3,add
+FNDA:0,complete
+LF:20
+LH:15
+end_of_record
+"""
+
+
 class ProjectCase(unittest.TestCase):
     """每个用例一个临时项目，测完即删。"""
 
@@ -188,6 +229,19 @@ class ProjectCase(unittest.TestCase):
         self.write("target/surefire-reports/TEST-com.example.CalcTest.xml",
                    JAVA_SUREFIRE_XML)
         self.write("target/site/jacoco/jacoco.xml", JAVA_JACOCO_XML)
+
+    def make_cmake_project(self) -> None:
+        self.write("CMakeLists.txt", """cmake_minimum_required(VERSION 3.16)
+project(fixture LANGUAGES CXX)
+enable_testing()
+add_executable(calc_test tests/calc_test.cpp)
+add_test(NAME Calc.Add COMMAND calc_test --only Calc.Add)
+""")
+        self.write("src/calc.cpp",
+                   "int add(int a, int b) { return a + b; }\n"
+                   "int unused() { return 0; }\n")
+        self.write("tests/calc_test.cpp", CPP_CALC_TEST)
+        self.write("build/lcov.info", CPP_LCOV)
 
     def make_gradle_project(self) -> None:
         self.write("build.gradle", """plugins { id 'java'; id 'jacoco' }

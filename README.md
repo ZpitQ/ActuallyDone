@@ -1,6 +1,6 @@
 # ActuallyDone
 
-当前版本 **v1.3.12**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.13**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
@@ -95,7 +95,7 @@ adone upgrade
 
 ## 4. Quick start
 
-在项目根目录（放 `go.mod` / `pom.xml` / `adone.toml` 的那一层）执行。
+在项目根目录（放 `go.mod` / `pom.xml` / `CMakeLists.txt` / `adone.toml` 的那一层）执行。
 
 ```bash
 cd 你的项目
@@ -240,6 +240,43 @@ pom 里用 `systemPropertyVariables` 把这些 `-D` 转进测试 JVM；不要用
 
 多模块项目的覆盖率按各模块行数相加；有 `jacoco-aggregate` 时只认聚合报告。
 配置里写 `mvn` / `./mvnw` 即可，Windows 上会自动对上 `mvn.cmd` / `mvnw.cmd`。
+
+### C++（CMake）
+
+`adone init` 看见 `CMakeLists.txt` 会写出三步：configure、build、ctest。
+同一份 `argv` 在 Windows / macOS / Linux 上都能跑：
+
+- `cmake` / `ctest` 在 Windows 上对上 `cmake.exe` / `ctest.exe`
+- `-DCMAKE_BUILD_TYPE=Release` 给 Ninja / Makefiles
+- `--config Release` 与 `ctest -C Release` 给 Visual Studio 多配置生成器（单配置生成器会忽略）
+
+```toml
+[project]
+name = "task-store"
+ecosystems = ["cpp"]
+
+[gate]
+watch_roots = ["include", "src", "tests"]
+watch_exts = [".cpp", ".hpp", ".h"]
+
+[[gate.step]]
+name = "cmake configure"
+argv = ["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"]
+
+[[gate.step]]
+name = "cmake build"
+argv = ["cmake", "--build", "build", "--config", "Release"]
+
+[[gate.step]]
+name = "ctest"
+kind = "test"
+adapter = "cpp"
+argv = ["cmake", "-E", "chdir", "build", "ctest", "--output-on-failure", "-V", "-C", "Release"]
+```
+
+适配器认 GoogleTest 的 `[ OK ] Suite.Case`、CTest 的 `Test #n: name Passed`，以及 Catch2 的 passed/failed 行。
+覆盖率认 `lcov.info`。MSVC 没有 gcov，不要填 `coverage.threshold`，否则门禁会把「未评估」当成失败。
+演示见 `demo/task-store-cpp`（C++17，不引 GoogleTest）。
 
 ### 场景门禁（可选）
 

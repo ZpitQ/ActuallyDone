@@ -1,0 +1,99 @@
+{
+  "created_at": "2026-08-31T14:18:37",
+  "reason": "首次建立（由 gate run 自动记账）",
+  "hash": "70f1db5f3d730c4a45f730f57517a98dcec5138b7509facfd0ae40d40d3f02b9",
+  "snapshot": {
+    "watch_roots": [
+      "include",
+      "src",
+      "tests"
+    ],
+    "watch_exts": [
+      ".cc",
+      ".cpp",
+      ".cxx",
+      ".h",
+      ".hh",
+      ".hpp"
+    ],
+    "min_tree_files": 3,
+    "steps": [
+      {
+        "name": "cmake configure",
+        "kind": "",
+        "adapter": "",
+        "cwd": ".",
+        "argv": [
+          "cmake",
+          "-S",
+          ".",
+          "-B",
+          "build",
+          "-DCMAKE_BUILD_TYPE=Release"
+        ],
+        "invalid_marks": [],
+        "script": null
+      },
+      {
+        "name": "cmake build",
+        "kind": "",
+        "adapter": "",
+        "cwd": ".",
+        "argv": [
+          "cmake",
+          "--build",
+          "build",
+          "--config",
+          "Release"
+        ],
+        "invalid_marks": [],
+        "script": null
+      },
+      {
+        "name": "ctest",
+        "kind": "test",
+        "adapter": "cpp",
+        "cwd": ".",
+        "argv": [
+          "cmake",
+          "-E",
+          "chdir",
+          "build",
+          "ctest",
+          "--output-on-failure",
+          "-V",
+          "-C",
+          "Release"
+        ],
+        "invalid_marks": [],
+        "script": null
+      }
+    ],
+    "coverage_threshold": null,
+    "coverage_source": "ctest",
+    "tests_adapter": "cpp",
+    "tests_roots": [
+      "tests"
+    ],
+    "baseline_exempt": [],
+    "checks": {
+      "consistency.pair": 0,
+      "docs.required": 1,
+      "docs.excerpt": 0,
+      "docs.claim": 0,
+      "code.unused": 0,
+      "probe": 0
+    },
+    "contracts": {
+      "adone/acceptance/task-rules.toml": {
+        "items": 4,
+        "tests": [
+          "TaskStore.Add",
+          "TaskStore.RejectEmptyTitle",
+          "TaskStore.Complete",
+          "TaskStore.CompleteTwiceRejected"
+        ]
+      }
+    }
+  }
+}

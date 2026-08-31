@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from actuallydone.adapters import CAP_TESTS, get
+from actuallydone.adapters.cpp_adapter import CppAdapter
 from actuallydone.adapters.go_adapter import GoAdapter, func_name
 from actuallydone.adapters.java_adapter import JavaAdapter
 from actuallydone.adapters.node_adapter import NodeAdapter
 from actuallydone.adapters.python_adapter import PythonAdapter
-from tests.helpers import (GO_TEST_OUTPUT, GRADLE_TEST_OUTPUT, JAVA_JACOCO_XML,
-                           MAVEN_TEST_OUTPUT, NODE_TEST_OUTPUT, ProjectCase)
+from tests.helpers import (CTEST_TEST_OUTPUT, GO_TEST_OUTPUT, GRADLE_TEST_OUTPUT,
+                           GTEST_TEST_OUTPUT, JAVA_JACOCO_XML, MAVEN_TEST_OUTPUT,
+                           NODE_TEST_OUTPUT, ProjectCase)
 
 
 class TestGoAdapter(ProjectCase):
@@ -268,6 +270,77 @@ class Api {
         self.assertIn(".kt", exts)
 
 
+class TestCppAdapter(ProjectCase):
+    def test_解析GoogleTest输出(self):
+        res = CppAdapter(self.root).parse_test_output(GTEST_TEST_OUTPUT)
+        self.assertEqual(res.passed, 1)
+        self.assertEqual(res.failed, 1)
+        self.assertEqual(res.skipped, 1)
+        self.assertIn("Calc.Add", res.passed_names)
+        self.assertIn("Calc.Sub", res.failed_names)
+        self.assertIn("Calc.Skip", res.skipped_names)
+
+    def test_解析CTest输出(self):
+        res = CppAdapter(self.root).parse_test_output(CTEST_TEST_OUTPUT)
+        self.assertEqual(res.passed, 1)
+        self.assertEqual(res.failed, 1)
+        self.assertEqual(res.skipped, 1)
+        self.assertIn("Calc.Add", res.passed_names)
+
+    def test_CTest前缀的GTest行也能认(self):
+        text = "1: [       OK ] TaskStore.Add (0 ms)\n1: [  FAILED  ] TaskStore.Buy\n"
+        res = CppAdapter(self.root).parse_test_output(text)
+        self.assertEqual(res.passed_names, ["TaskStore.Add"])
+        self.assertEqual(res.failed_names, ["TaskStore.Buy"])
+
+    def test_列出用例名含GTest与Catch(self):
+        self.make_cmake_project()
+        names = CppAdapter(self.root).test_names([self.root / "tests"])
+        self.assertEqual(names, {"Calc.Add", "Calc.NoAssert", "catch-add"})
+
+    def test_无断言与跳过(self):
+        self.make_cmake_project()
+        ad = CppAdapter(self.root)
+        p = self.root / "tests/calc_test.cpp"
+        funcs = {f.name: f for f in ad.iter_test_funcs(p)}
+        self.assertFalse(ad.is_assertionless(funcs["Calc.Add"].body))
+        self.assertTrue(ad.is_assertionless(funcs["Calc.NoAssert"].body))
+        self.write("tests/skip_test.cpp",
+                   "TEST(Calc, X) { GTEST_SKIP(); }\n")
+        self.assertGreaterEqual(ad.skip_sites(
+            (self.root / "tests/skip_test.cpp").read_text(encoding="utf-8")), 1)
+
+    def test_探测步骤三系统同一份argv(self):
+        self.make_cmake_project()
+        steps = CppAdapter(self.root).suggest_steps(".")
+        names = [s["name"] for s in steps]
+        self.assertEqual(names, ["cmake configure", "cmake build", "ctest"])
+        test = steps[-1]
+        self.assertEqual(test["adapter"], "cpp")
+        self.assertIn("-C", test["argv"])
+        self.assertIn("Release", test["argv"])
+        self.assertIn("chdir", test["argv"])
+        conf = steps[0]["argv"]
+        self.assertIn("-DCMAKE_BUILD_TYPE=Release", conf)
+        self.assertIn("--config", steps[1]["argv"])
+
+    def test_监视src_include_tests(self):
+        self.make_cmake_project()
+        self.write("include/calc.hpp", "int add(int, int);\n")
+        roots, exts = CppAdapter(self.root).suggest_watch(".")
+        self.assertIn("src", roots)
+        self.assertIn("tests", roots)
+        self.assertIn("include", roots)
+        self.assertIn(".cpp", exts)
+        self.assertIn(".hpp", exts)
+
+    def test_读lcov覆盖率(self):
+        self.make_cmake_project()
+        ad = CppAdapter(self.root)
+        self.assertEqual(ad.coverage_from_reports(self.root), 75.0)
+        self.assertEqual(ad.zero_cover(self.root / "build/lcov.info", self.root), (1, 2))
+
+
 class TestRegistry(ProjectCase):
     def test_不认识的生态退回无能力基类而不是抛错(self):
         ad = get("cobol", self.root)
@@ -277,3 +350,4 @@ class TestRegistry(ProjectCase):
     def test_能力集合(self):
         self.assertIn(CAP_TESTS, get("go", self.root).caps)
         self.assertIn(CAP_TESTS, get("java", self.root).caps)
+        self.assertIn(CAP_TESTS, get("cpp", self.root).caps)

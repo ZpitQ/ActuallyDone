@@ -30,7 +30,9 @@ CONFIG_NAME = "adone.toml"
 PRUNE_DIRS = frozenset({
     ".git", ".hg", ".svn", "node_modules", "vendor", "dist", "build", "target",
     "__pycache__", ".venv", "venv", ".tox", ".mypy_cache", ".pytest_cache",
-    ".next", ".nuxt", ".gradle", ".adone", ".idea", ".vscode",
+    ".next", ".nuxt", ".gradle", ".adone", ".idea", ".vscode", ".vs",
+    "cmake-build-debug", "cmake-build-release", "cmake-build-relwithdebinfo",
+    "cmake-build-minsizerel",
 })
 
 # 只有「不猜也不会骗人」的值才配出现在这里

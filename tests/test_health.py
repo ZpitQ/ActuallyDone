@@ -149,6 +149,17 @@ class TestDetectAndInstall(ProjectCase):
         self.assertIn("node", got.ecosystems)
         self.assertIn("前端构建", [s["name"] for s in got.steps])
 
+    def test_探测cpp项目步骤指向ctest(self):
+        self.make_cmake_project()
+        got = detect.detect(self.root)
+        self.assertEqual(got.ecosystems.get("cpp"), ".")
+        self.assertEqual(got.tests_adapter, "cpp")
+        self.assertIn("ctest", [s["name"] for s in got.steps])
+        text = detect.render_config(got)
+        self.assertIn('source = "ctest"', text)
+        self.assertIn('adapter = "cpp"', text)
+        self.assertIn("-DCMAKE_BUILD_TYPE=Release", text)
+
     def test_探测java项目且覆盖率来源指向测试步骤(self):
         self.make_maven_project()
         got = detect.detect(self.root)

@@ -1,0 +1,11 @@
+build/
+cmake-build-*/
+.vs/
+out/
+.adone/*
+!.adone/test-baseline.json
+!.adone/policy-baseline.json
+!.adone/chain.json
+!.adone/latest.json
+!.adone/receipts/
+!.adone/receipts/*.json

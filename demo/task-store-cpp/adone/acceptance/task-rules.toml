@@ -1,0 +1,21 @@
+task = "任务清单"
+
+[[item]]
+"要求" = "可以新增一条未完成任务"
+test = "TaskStore.Add"
+impl = "src/store.cpp:8"
+
+[[item]]
+"要求" = "空标题必须拒绝"
+test = "TaskStore.RejectEmptyTitle"
+impl = "src/store.cpp:9"
+
+[[item]]
+"要求" = "完成后状态变为 Done"
+test = "TaskStore.Complete"
+impl = "src/store.cpp:29"
+
+[[item]]
+"要求" = "已完成的任务不能再完成一次"
+test = "TaskStore.CompleteTwiceRejected"
+impl = "src/store.cpp:34"

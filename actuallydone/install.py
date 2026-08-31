@@ -63,6 +63,15 @@ DIALECT = {
         "FMT_CMD": "mvn -B spotless:check 通过",
         "BUILD_CMD": "mvn -B -ntp test 通过",
     },
+    "cpp": {
+        "ASSERT_API": "ASSERT_* / EXPECT_* / REQUIRE / assert",
+        "SKIP_API": "GTEST_SKIP / DISABLED_ / SKIP",
+        "TEST_FUNC_FORM": "用例名（`Suite.Case`）",
+        "TEST_NAME_EXAMPLE": "TaskStore.Add",
+        "IMPL_EXAMPLE": "<实现文件>.cpp:168",
+        "FMT_CMD": "clang-format --dry-run 通过",
+        "BUILD_CMD": "cmake --build build --config Release 通过",
+    },
 }
 FALLBACK = {
     "ASSERT_API": "断言函数",
