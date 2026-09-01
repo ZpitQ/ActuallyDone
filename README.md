@@ -49,47 +49,70 @@ ActuallyDone 提供一条命令 `adone`，让「完成」变成**别人可以独
 
 ## 3. 安装
 
-需要 Python 3.11+。三种装法，按侵入程度从低到高。
+需要 Python 3.11+，零第三方依赖。推荐 pipx：它给 `adone` 单独建一个 venv，
+自己挑一个够新的解释器，不碰你项目的环境。
 
-### macOS / Linux
+### 装：一条命令，三个平台一样
 
 ```bash
-# 推荐：独立 venv，adone 落在 ~/.local/bin
 pipx install git+https://github.com/iamharvey/ActuallyDone.git
 adone --version
+```
 
-# 或 pip（装进当前解释器）
+**地址后面不要加 `@v1.3.18` 这样的 tag。** pipx 会把你给的这串地址原样记下来当作以后的升级源，
+钉了 tag 就是钉死在那一版：之后 `pipx upgrade` 只会回你「已是最新」，新版本永远进不来。
+不带 tag 装，取的就是最新代码。
+
+没有 pipx 先装一个（Windows 把 `python3` 换成 `py -3`）：
+
+```bash
+python3 -m pip install --user pipx
+python3 -m pipx ensurepath
+```
+
+### 让 `adone` 敲得出来
+
+pipx 把命令放在 `~/.local/bin`，Windows 上是 `%USERPROFILE%\.local\bin`。
+这个目录常常不在 PATH 里——命令敲不出来，钩子也一样找不到它。
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # bash 改 ~/.bashrc
+source ~/.zshrc
+```
+
+Windows 用 `pipx ensurepath`，然后重开终端。
+
+`adone --version` 能打印版本号，再往下走。
+
+### 升级：用 `adone upgrade`，不要用 `pipx upgrade`
+
+```bash
+adone upgrade --check                 # 只查有没有新版，不动安装
+adone upgrade
+adone install --hooks-only --force    # 每个装了钩子的项目各跑一次
+```
+
+`adone upgrade` 不看 pipx 记的那串地址，自己去 GitHub 把 Release、tag、默认分支的版本号
+比一遍取最新的，认出你是 pipx / pip / git 工作树再覆盖过去。所以当初装的时候带没带 tag，
+它都升得上去。它覆盖的是 PATH 上那份 `adone`，不是你当前所在的源码目录——
+否则会出现「看起来升了，敲 `adone` 还是旧版」。
+
+最后那条 `--hooks-only --force` 不能省：钩子里烧着安装时的绝对路径，换版本或换位置就会失效，
+而失效的样子和「门禁通过」在终端里一模一样。
+
+### 另外两种装法
+
+```bash
+# pip：装进当前解释器，和项目依赖共享环境
 pip install git+https://github.com/iamharvey/ActuallyDone.git
 
-# 或 vendor：把本仓库拷进项目的 tools/，走免安装入口
+# vendor：把本仓库拷进项目的 tools/，免安装
 python3 tools/ActuallyDone/bin/adone --version
 ```
 
-Linux 上若 `adone` 敲不出来，把 `~/.local/bin` 加进 PATH：
-
-```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc   # 或 ~/.zshrc
-source ~/.bashrc
-```
-
-### Windows
-
-```powershell
-pipx install git+https://github.com/iamharvey/ActuallyDone.git
-adone --version
-```
-
-`adone` 会落在 `%USERPROFILE%\.local\bin`。这个目录常常不在 PATH 里，先加进去，
-否则命令敲不出来，钩子也找不到它。
-
-已装过的用 `adone upgrade` 覆盖当前安装（不读项目里的 `adone.toml`）：
-
-```bash
-adone upgrade --check
-adone upgrade
-```
-
-升完若项目里装了钩子，再跑一次 `adone install --hooks-only --force`。
+pip 那条若报 `requires a different Python: 3.10.x not in '>=3.11'`，是你敲的这个 `pip`
+属于某个 3.10 环境（conda 里很常见），不是机器上没有新 Python。
+换 `python3.12 -m pip install …`，或者回到上面的 pipx——pipx 会自己挑够新的解释器。
 
 <br/><br/>
 
@@ -523,6 +546,7 @@ A：3.11+。钩子拿到的 PATH 常常和终端不一样，本机发生过被 c
 `import tomllib` 失败。`bin/adone` 会自己找一个够新的解释器：macOS / Linux 去
 `~/.local/bin`、`~/.pyenv/shims`；Windows 去 `py.exe` 和
 `%LOCALAPPDATA%\Programs\Python`。
+装的时候 `pip` 报 `3.10.x not in '>=3.11'` 是同一回事，见第 3 节末尾。
 
 <br/>
 
@@ -567,6 +591,13 @@ A：新接入一门生态用 `adone detect --merge`。不要用 `--write` 覆盖
 **Q：问一句设计、没改代码，也被推去跑全量测试？**  
 A：那是 1.3.14 之前的设计：把每一轮 `stop` 当成「宣称完成」。现在的配置和用法见第 5 节。
 升完要 `adone install --hooks-only --force`，否则项目里还是旧钩子。
+
+<br/>
+
+**Q：`pipx upgrade actuallydone` 说「已是最新」，GitHub 上明明有新版？**  
+A：当初是带 `@v1.3.x` 这样的 tag 装的，pipx 把这串地址记成了升级源，等于钉死在那一版。
+改用 `adone upgrade`；或者不带 tag 重装一次：
+`pipx install --force git+https://github.com/iamharvey/ActuallyDone.git`。
 
 <br/>
 
