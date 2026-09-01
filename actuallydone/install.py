@@ -544,6 +544,11 @@ def our_hooks(cfg: Config | None = None) -> dict:
             {"command": hook_command("mark-dirty", cfg), "timeout": 10}],
         "afterFileEdit": [
             {"command": hook_command("mark-dirty", cfg), "timeout": 10}],
+        "afterTabFileEdit": [
+            {"command": hook_command("mark-dirty", cfg), "timeout": 10}],
+        "postToolUse": [
+            {"command": hook_command("mark-dirty", cfg), "timeout": 10,
+             "matcher": "Write|StrReplace|Edit|TabWrite"}],
         "stop": [
             {"command": hook_command("gate-guard", cfg), "timeout": 180,
              "loop_limit": 3, "failClosed": False}],

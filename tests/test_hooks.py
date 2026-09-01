@@ -236,6 +236,7 @@ class TestHooksJson(ProjectCase):
         POSIX 上登记显式解释器，不靠 shebang。"""
         merged, _ = install.merge_hooks({})
         want = {"sessionStart": "mark-dirty", "afterFileEdit": "mark-dirty",
+                "afterTabFileEdit": "mark-dirty", "postToolUse": "mark-dirty",
                 "stop": "gate-guard", "beforeShellExecution": "commit-guard"}
         for event, name in want.items():
             cmd = merged["hooks"][event][-1]["command"]
@@ -491,6 +492,81 @@ class TestHookrun(ProjectCase):
         self.assertIn("internal/calc.go",
                       (self.root / ".adone" / "dirty").read_text(encoding="utf-8"))
 
+    def test_mark_dirty认filePath与嵌套tool_input(self):
+        """Cursor 有的版本给 filePath / tool_input.path，只认 file_path 就永远记不下。"""
+        self.make_go_project()
+        self.write("adone.toml",
+                   "version = 1\n[project]\nname = 'f'\n"
+                   "[gate]\nwatch_roots = ['internal']\nwatch_exts = ['.go']\n")
+        p = str(self.root / "internal/calc.go")
+        for payload in (
+            {"filePath": p, "hook_event_name": "afterFileEdit"},
+            {"path": p},
+            {"tool_input": {"path": p}, "tool_name": "Write"},
+            {"file_path": "file://" + p},
+            {"edits": [{"file_path": p, "old_string": "a", "new_string": "b"}]},
+        ):
+            dest = self.root / ".adone" / "dirty"
+            dest.unlink(missing_ok=True)
+            self.assertEqual(self.fire("mark-dirty", payload), {})
+            self.assertIn("internal/calc.go", dest.read_text(encoding="utf-8"), payload)
+
+    def test_mark_dirty_sessionStart不报警(self):
+        self.make_go_project()
+        self.write("adone.toml",
+                   "version = 1\n[project]\nname = 'f'\n"
+                   "[gate]\nwatch_roots = ['internal']\nwatch_exts = ['.go']\n")
+        self.assertEqual(self.fire("mark-dirty", {"hook_event_name": "sessionStart"}), {})
+        self.assertFalse((self.root / ".adone" / "dirty").exists())
+        log = (self.root / ".adone" / "hook.log").read_text(encoding="utf-8")
+        self.assertIn("跳过", log)
+        self.assertNotIn("改动没记下", log)
+
+    def test_gate_guard无dirty但git有受监视改动则跑changed(self):
+        """afterFileEdit 记不下时，stop 必须退到 git，否则改很多代码也不跑增量。"""
+        self.make_go_project()
+        self.write("adone.toml",
+                   "version = 1\n[project]\nname = 'f'\n"
+                   "ecosystems = ['go']\n"
+                   "[gate]\nwatch_roots = ['internal']\nwatch_exts = ['.go']\n"
+                   "min_tree_files = 1\n"
+                   "[[gate.step]]\nname = 'go test'\nkind = 'test'\n"
+                   "adapter = 'go'\nargv = ['go', 'test', './...']\n"
+                   "[tests]\nadapter = 'go'\n")
+        subprocess.run(["git", "init"], cwd=self.root, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                        "add", "-A"], cwd=self.root, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                        "commit", "-m", "i"], cwd=self.root, check=True,
+                       capture_output=True)
+        self.write("internal/orphan.go", "package internal\nfunc Orphan() {}\n")
+        got = self.fire("gate-guard", {"status": "completed", "loop_count": 0})
+        self.assertIn("followup_message", got)
+        self.assertIn("相关用例", got["followup_message"])
+        self.assertIn("--changed", got["followup_message"])
+
+    def test_gate_guard上次changed已通过且文件未改则跳过(self):
+        from actuallydone.changed import file_hashes, _write_partial
+        from actuallydone.config import Config
+        self.make_go_project()
+        self.write("adone.toml",
+                   "version = 1\n[project]\nname = 'f'\n"
+                   "[gate]\nwatch_roots = ['internal']\nwatch_exts = ['.go']\n"
+                   "min_tree_files = 1\n")
+        dest = self.root / ".adone"
+        dest.mkdir(parents=True, exist_ok=True)
+        dest.joinpath("dirty").write_text("internal/calc.go\n", encoding="utf-8")
+        cfg = Config.load(self.root)
+        hashes = file_hashes(cfg, ["internal/calc.go"])
+        _write_partial(cfg, ok=True, files=["internal/calc.go"], tests=["TestAdd"],
+                       argv=["go", "test"], note="ok", file_hashes=hashes)
+        got = self.fire("gate-guard", {"status": "completed", "loop_count": 0})
+        self.assertEqual(got, {})
+        log = (self.root / ".adone" / "hook.log").read_text(encoding="utf-8")
+        self.assertIn("文件未再改", log)
+
     def test_gate_guard无dirty不回推即使没有回执(self):
         self.make_go_project()
         self.write("adone.toml",
@@ -522,6 +598,16 @@ class TestHookrun(ProjectCase):
         self.assertIn("不要", msg)
         self.assertIn("全量", msg)
         self.assertNotIn("重跑门禁", msg)
+
+    def test_paths_from_payload覆盖常见字段(self):
+        from actuallydone.hookrun import paths_from_payload
+        self.assertEqual(paths_from_payload({"file_path": "/a/b.go"}), ["/a/b.go"])
+        self.assertEqual(paths_from_payload({"filePath": "/a/b.go"}), ["/a/b.go"])
+        self.assertEqual(paths_from_payload({"tool_input": {"path": "/a/b.go"}}),
+                         ["/a/b.go"])
+        self.assertEqual(
+            paths_from_payload({"hook_event_name": "sessionStart"}), [])
+        self.assertEqual(paths_from_payload({}), [])
 
     def test_commit_guard非commit放行(self):
         self.make_go_project()

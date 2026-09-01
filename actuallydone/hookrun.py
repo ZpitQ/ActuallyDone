@@ -75,39 +75,143 @@ def _load() -> tuple[Config | None, Path]:
         return None, root
 
 
+# Cursor 各版本 / 事件给的路径字段不统一。只认 file_path 时，afterFileEdit
+# 会触发、dirty 却永远是空的，stop 就会把「改了很多代码」当成没改。
+_PATH_KEYS = frozenset({
+    "file_path", "filepath", "filePath", "path", "file", "uri",
+    "target", "target_file", "targetFile",
+})
+_NEST_KEYS = frozenset({
+    "edits", "files", "input", "tool_input", "toolInput",
+    "arguments", "params", "data",
+})
+_SKIP_EVENTS = frozenset({"sessionStart", "sessionEnd"})
+
+
+def _as_path(val) -> str:
+    if isinstance(val, str):
+        p = val.strip()
+        if p.startswith("file://"):
+            p = p[7:]
+            if os.name == "nt" and p.startswith("/") and len(p) > 2 and p[2] == ":":
+                p = p[1:]
+        return p
+    if isinstance(val, dict):
+        for k in ("file_path", "filePath", "path", "uri"):
+            got = _as_path(val.get(k))
+            if got:
+                return got
+    return ""
+
+
+def paths_from_payload(payload) -> list[str]:
+    """从 afterFileEdit / afterTabFileEdit / postToolUse 的 JSON 里抽出路径。"""
+    found: list[str] = []
+
+    def add(val) -> None:
+        if isinstance(val, list):
+            for item in val:
+                add(item)
+            return
+        p = _as_path(val)
+        if p and p not in found:
+            found.append(p)
+
+    def walk(obj, depth: int = 0) -> None:
+        if depth > 5 or not isinstance(obj, dict):
+            return
+        for key, val in obj.items():
+            kl = str(key)
+            if kl in _PATH_KEYS or kl.lower().endswith("path") or kl.lower().endswith("file"):
+                if kl in ("workspace_roots", "transcript_path", "transcriptPath"):
+                    continue
+                add(val)
+            elif kl in _NEST_KEYS:
+                add(val)
+                if isinstance(val, dict):
+                    walk(val, depth + 1)
+                elif isinstance(val, list):
+                    for item in val:
+                        if isinstance(item, dict):
+                            walk(item, depth + 1)
+            elif isinstance(val, dict) and depth < 2:
+                walk(val, depth + 1)
+
+    if isinstance(payload, list):
+        for item in payload:
+            walk(item)
+    elif isinstance(payload, dict):
+        walk(payload)
+    return found
+
+
+def _to_rel(path: str, base: Path) -> str | None:
+    raw = path.strip()
+    if not raw:
+        return None
+    p = Path(raw)
+    try:
+        abs_p = p if p.is_absolute() else (base / p)
+        rel = os.path.relpath(os.path.realpath(abs_p), os.path.realpath(base))
+    except (OSError, ValueError):
+        return None
+    rel = rel.replace(os.sep, "/")
+    if rel.startswith("../"):
+        return None
+    return rel
+
+
+def _append_dirty(cfg: Config | None, root: Path, rel: str) -> None:
+    dest = (cfg.dirty if cfg is not None else root / ".adone" / "dirty")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "a", encoding="utf-8") as f:
+        f.write(rel + "\n")
+
+
 def cmd_mark_dirty(_args=None) -> int:
     cfg, root = _load()
     _log(cfg, "mark-dirty", "launched", root)
+    raw = sys.stdin.read()
+    if raw.startswith("\ufeff"):
+        raw = raw[1:]
     try:
-        payload = _payload()
-    except Exception as e:
-        _log(cfg, "afterFileEdit", f"读不动 payload（{type(e).__name__}），改动没记下", root)
+        payload = json.loads(raw or "{}")
+    except (ValueError, OSError) as e:
+        _log(cfg, "afterFileEdit",
+             f"读不动 payload（{type(e).__name__} stdin={len(raw)}B），改动没记下", root)
         return _emit({})
 
-    path = payload.get("file_path") or ""
-    if not path:
-        _log(cfg, "afterFileEdit", "payload 里没有 file_path，改动没记下", root)
+    event = ""
+    if isinstance(payload, dict):
+        event = str(payload.get("hook_event_name") or payload.get("event") or "")
+    paths = paths_from_payload(payload)
+    if not paths:
+        keys = list(payload) if isinstance(payload, dict) else [type(payload).__name__]
+        if event in _SKIP_EVENTS or (not raw.strip() and not event):
+            _log(cfg, "afterFileEdit", f"{event or 'empty'} 无路径，跳过", root)
+        else:
+            _log(cfg, "afterFileEdit",
+                 f"payload 无路径（keys={keys} event={event} stdin={len(raw)}B），改动没记下",
+                 root)
         return _emit({})
 
     base = cfg.root if cfg is not None else root
-    try:
-        rel = os.path.relpath(os.path.realpath(path), os.path.realpath(base))
-    except (OSError, ValueError):
-        return _emit({})
-    rel = rel.replace(os.sep, "/")
-    if rel.startswith("../"):
-        return _emit({})
-
     roots = (cfg.get("gate.watch_roots") or ["."]) if cfg else ["."]
     exts = (cfg.get("gate.watch_exts") or []) if cfg else []
-    if _watched(rel, roots, exts):
+    noted: list[str] = []
+    for path in paths:
+        rel = _to_rel(path, base)
+        if rel is None:
+            continue
+        if not _watched(rel, roots, exts):
+            continue
         try:
-            dest = (cfg.dirty if cfg is not None else root / ".adone" / "dirty")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            with open(dest, "a", encoding="utf-8") as f:
-                f.write(rel + "\n")
+            _append_dirty(cfg, root, rel)
+            noted.append(rel)
         except OSError as e:
             _log(cfg, "afterFileEdit", f"写 dirty 失败（{e}）：{rel}", root)
+    if noted:
+        _log(cfg, "afterFileEdit", f"记下 {'、'.join(noted[:8])}", root)
     return _emit({})
 
 
@@ -146,15 +250,19 @@ def cmd_gate_guard(_args=None) -> int:
             "（或它的子目录），再谈完成。",
         ])})
 
-    from .gate import read_dirty
-    dirty = read_dirty(cfg)
-    if not dirty:
-        _log(cfg, "stop", "dirty 为空，本轮无受监视改动，不回推", root)
+    from .changed import changed_paths, run_changed, same_as_last_ok_partial
+    roots = cfg.get("gate.watch_roots") or ["."]
+    exts = cfg.get("gate.watch_exts") or []
+    files = [f for f in changed_paths(cfg) if _watched(f, roots, exts)]
+    if not files:
+        _log(cfg, "stop", "dirty 与 git 都没有受监视改动，不回推", root)
+        return _emit({})
+    if same_as_last_ok_partial(cfg, files):
+        _log(cfg, "stop", f"相关用例已通过且文件未再改（{len(files)}），跳过", root)
         return _emit({})
 
     try:
-        from .changed import run_changed
-        data = run_changed(cfg, paths=dirty, quiet=True)
+        data = run_changed(cfg, paths=files, quiet=True)
     except Exception as e:
         _log(cfg, "stop", f"--changed 跑不起来（{type(e).__name__}: {e}），已回推", root)
         return _emit({"followup_message": "\n".join([
@@ -165,7 +273,7 @@ def cmd_gate_guard(_args=None) -> int:
         ])})
 
     if data.get("ok"):
-        _log(cfg, "stop", f"相关用例通过（{len(dirty)} 个 dirty），放行")
+        _log(cfg, "stop", f"相关用例通过（{len(files)} 个文件），放行")
         return _emit({})
 
     problems = data.get("problems") or []

@@ -2,6 +2,16 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.15 — 2026-09-01
+
+- **afterFileEdit 记不下 dirty**：只认 `file_path` 时，Cursor 给 `filePath` /
+  `tool_input.path` / 空 stdin 都会让 dirty 永远为空，`stop` 把大量改动当成没改。
+  现在从多种字段抽路径；`sessionStart` 无路径不再当失败；记成功会在 hook.log 写「记下 …」。
+- **stop 兜底**：dirty 为空时看 `git status`（含未跟踪新文件），只对受监视后缀跑 `--changed`。
+  上一轮 `partial.json` 已通过且文件哈希没变则跳过，避免问答反复跑。
+- 额外登记 `afterTabFileEdit` 与 `postToolUse`（Write / StrReplace / Edit）。
+  已装项目要 `adone install --hooks-only --force`。
+
 ## v1.3.14 — 2026-08-31
 
 - **开发中增量、提交时全量**：Cursor `stop` 的 `completed` 只表示这轮说完了，不是「做完了」。

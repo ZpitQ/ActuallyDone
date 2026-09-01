@@ -8,7 +8,8 @@ from io import StringIO
 from contextlib import redirect_stdout
 
 from actuallydone.adapters.base import Adapter
-from actuallydone.changed import changed_paths, run_changed
+from actuallydone.changed import (changed_paths, file_hashes, git_diff_names,
+                                   run_changed, same_as_last_ok_partial)
 from actuallydone.install import PRE_COMMIT_MARK, cmd_install
 from tests.helpers import ProjectCase
 from tests.test_hooks import _args
@@ -52,6 +53,7 @@ class TestRelatedRun(ProjectCase):
         data = json.loads(cfg.partial.read_text(encoding="utf-8"))
         self.assertEqual(data["kind"], "changed")
         self.assertFalse(data["latest"])
+        self.assertIn("lib.py", data.get("file_hashes") or {})
 
     def test_找不到相关用例不退回全量(self):
         self._py_project()
@@ -89,6 +91,29 @@ class TestRelatedRun(ProjectCase):
         from actuallydone.config import Config
         cfg = Config.load(self.root)
         self.assertEqual(changed_paths(cfg), ["lib.py"])
+
+    def test_git含未跟踪新文件(self):
+        self._py_project()
+        subprocess.run(["git", "init"], cwd=self.root, check=True,
+                       capture_output=True)
+        self.write("new_one.py", "x = 1\n")
+        names = git_diff_names(self.root)
+        self.assertIn("new_one.py", names)
+        from actuallydone.config import Config
+        cfg = Config.load(self.root)
+        self.assertIn("new_one.py", changed_paths(cfg))
+
+    def test_same_as_last_ok_partial比哈希(self):
+        self._py_project()
+        from actuallydone.changed import _write_partial
+        from actuallydone.config import Config
+        cfg = Config.load(self.root)
+        hashes = file_hashes(cfg, ["lib.py"])
+        _write_partial(cfg, ok=True, files=["lib.py"], tests=["test_add"],
+                       argv=[], note="ok", file_hashes=hashes)
+        self.assertTrue(same_as_last_ok_partial(cfg, ["lib.py"]))
+        self.write("lib.py", "def add(a, b):\n    return a - b\n")
+        self.assertFalse(same_as_last_ok_partial(cfg, ["lib.py"]))
 
 
 class TestPreCommitInstall(ProjectCase):

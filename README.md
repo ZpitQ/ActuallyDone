@@ -1,6 +1,6 @@
 # ActuallyDone
 
-当前版本 **v1.3.14**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.15**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
@@ -150,8 +150,9 @@ adone health --open                # 出一页健康度报告并打开
 | macOS / Linux | `python3 -m actuallydone hook …` | PATH 里有 `python3` 和 `adone`；不写 `.cmd` / `.exe` |
 | Windows | `.cursor/hooks/<名>.exe` | 安装时复制的本机 `adone.exe`（不要提交）；`.cmd` 只给手跑 |
 
-会登记三条钩子：`mark-dirty`（`afterFileEdit`）、`gate-guard`（`stop`）、
-`commit-guard`（`beforeShellExecution` 命中 `git commit`）。用法见下一节。
+会登记 `mark-dirty`（`afterFileEdit` / `afterTabFileEdit` / `postToolUse`）、
+`gate-guard`（`stop`）、`commit-guard`（`beforeShellExecution` 命中 `git commit`）。
+用法见下一节。
 
 Windows 上升完必须 `adone install --hooks-only --force`，然后确认 command 是 `.exe`，
 新开一轮 Agent 对话后 `.adone\hook.log` 里应出现 `mark-dirty launched`。
@@ -189,8 +190,8 @@ adone install --hooks-only --force  # 升完 adone 或换了钩子口径时重�
 
 | 事件 | 钩子 | 做什么 |
 | --- | --- | --- |
-| `afterFileEdit` | `mark-dirty` | 受监视文件写入 `.adone/dirty` |
-| `stop`（每轮 Agent 说完） | `gate-guard` | dirty **空**：不回推（问答、读代码走这条，即使回执过期）。dirty **非空**：跑 `--changed`，失败才回推，文案里禁止叫全量 `gate run` |
+| `afterFileEdit` / `afterTabFileEdit` / `postToolUse`（Write 等） | `mark-dirty` | 受监视文件写入 `.adone/dirty`。认 `file_path` / `filePath` / `tool_input.path` 等 |
+| `stop`（每轮 Agent 说完） | `gate-guard` | 先看 dirty，没有再看 `git status`（含未跟踪新文件）。都没有受监视改动：不回推。有改动：跑 `--changed`；上一轮已通过且文件哈希没变则跳过 |
 | `beforeShellExecution` 命中 `git commit` | `commit-guard` | 先 `gate check`；全量回执对不上则 `deny`（`--no-verify` 也拦） |
 | 本机 `git commit` | `.git/hooks/pre-commit` | 回执已新鲜则放行，否则跑全量 `gate run`，失败拒绝提交 |
 

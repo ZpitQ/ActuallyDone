@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from datetime import datetime
@@ -25,21 +26,55 @@ def changed_paths(cfg: Config, paths: list[str] | None = None) -> list[str]:
 
 
 def git_diff_names(root: Path) -> list[str]:
+    """已跟踪改动、暂存区、未跟踪新文件。新文件只靠 dirty 会漏掉。"""
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain", "-uall"],
+            cwd=root, capture_output=True, text=True, errors="replace",
+            timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if proc.returncode != 0:
+        return []
     seen: list[str] = []
-    for argv in (["git", "diff", "--name-only", "HEAD"],
-                 ["git", "diff", "--name-only", "--cached"]):
-        try:
-            proc = subprocess.run(argv, cwd=root, capture_output=True,
-                                  text=True, errors="replace", timeout=15)
-        except (OSError, subprocess.TimeoutExpired):
+    for ln in proc.stdout.splitlines():
+        if len(ln) < 4:
             continue
-        if proc.returncode != 0:
-            continue
-        for ln in proc.stdout.splitlines():
-            rel = ln.strip().replace("\\", "/")
-            if rel and rel not in seen:
-                seen.append(rel)
+        path = ln[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[-1]
+        rel = path.strip().strip('"').replace("\\", "/")
+        if rel and rel not in seen:
+            seen.append(rel)
     return seen
+
+
+def file_hashes(cfg: Config, rels: list[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for rel in rels:
+        p = cfg.root / rel
+        if not p.is_file():
+            continue
+        try:
+            out[rel] = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+        except OSError:
+            continue
+    return out
+
+
+def same_as_last_ok_partial(cfg: Config, files: list[str]) -> bool:
+    """上一轮 --changed 已通过，且这些文件内容没再变。"""
+    if not files or not cfg.partial.exists():
+        return False
+    try:
+        data = json.loads(cfg.partial.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not data.get("ok") or data.get("kind") != "changed":
+        return False
+    prev = data.get("file_hashes") or {}
+    now = file_hashes(cfg, files)
+    return now == prev and set(files) == set(prev)
 
 
 def pick_test_adapter(cfg: Config):
@@ -133,9 +168,10 @@ def run_changed(cfg: Config, paths: list[str] | None = None, *,
         if st.output_tail:
             problems.append(st.output_tail)
 
+    hashes = file_hashes(cfg, files)
     _write_partial(cfg, ok=st.ok, files=files, tests=names, argv=argv,
                    note=st.note or "", seconds=st.seconds,
-                   output_tail=st.output_tail)
+                   output_tail=st.output_tail, file_hashes=hashes)
     if st.ok:
         cfg.dirty.unlink(missing_ok=True)
     if not quiet:
@@ -160,13 +196,15 @@ def cmd_run_changed(cfg: Config) -> int:
 def _write_partial(cfg: Config, *, ok: bool, files: list[str],
                    tests: list[str] | None, argv: list[str] | None,
                    note: str, seconds: float | None = None,
-                   output_tail: str = "") -> None:
+                   output_tail: str = "",
+                   file_hashes: dict[str, str] | None = None) -> None:
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     cfg.partial.write_text(json.dumps({
         "kind": "changed",
         "ok": ok,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "files": files,
+        "file_hashes": file_hashes or {},
         "tests": tests,
         "argv": argv,
         "seconds": seconds,
