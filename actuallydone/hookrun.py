@@ -250,12 +250,18 @@ def cmd_gate_guard(_args=None) -> int:
             "（或它的子目录），再谈完成。",
         ])})
 
-    from .changed import changed_paths, run_changed, same_as_last_ok_partial
+    from .changed import changed_paths, git_diff_names, run_changed, same_as_last_ok_partial
+    from .gate import read_dirty
     roots = cfg.get("gate.watch_roots") or ["."]
     exts = cfg.get("gate.watch_exts") or []
+    dirty = read_dirty(cfg)
+    git_files = git_diff_names(cfg.root)
     files = [f for f in changed_paths(cfg) if _watched(f, roots, exts)]
     if not files:
-        _log(cfg, "stop", "dirty 与 git 都没有受监视改动，不回推", root)
+        preview = "、".join((dirty or git_files)[:6]) or "空"
+        _log(cfg, "stop",
+             f"dirty {len(dirty)} / git {len(git_files)} 条，无一受监视"
+             f"（roots={roots} exts={exts} 例如 {preview}），不回推", root)
         return _emit({})
     if same_as_last_ok_partial(cfg, files):
         _log(cfg, "stop", f"相关用例已通过且文件未再改（{len(files)}），跳过", root)

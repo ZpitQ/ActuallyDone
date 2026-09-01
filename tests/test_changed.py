@@ -92,6 +92,35 @@ class TestRelatedRun(ProjectCase):
         cfg = Config.load(self.root)
         self.assertEqual(changed_paths(cfg), ["lib.py"])
 
+    def test_父仓库里的子项目git路径相对项目根(self):
+        """git status 给出 demo/app/src/lib.py 时，必须收成 src/lib.py 才能对上 watch_roots。"""
+        app = self.root / "demo" / "app"
+        (app / "src").mkdir(parents=True)
+        (app / "src" / "lib.py").write_text("x = 1\n", encoding="utf-8")
+        (app / "adone.toml").write_text(
+            "version = 1\n[project]\nname = 'f'\n"
+            "[gate]\nwatch_roots = ['src']\nwatch_exts = ['.py']\n",
+            encoding="utf-8")
+        (self.root / "sibling.py").write_text("y = 1\n", encoding="utf-8")
+        subprocess.run(["git", "init"], cwd=self.root, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                        "add", "-A"], cwd=self.root, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                        "commit", "-m", "i"], cwd=self.root, check=True,
+                        capture_output=True)
+        (app / "src" / "lib.py").write_text("x = 2\n", encoding="utf-8")
+        (self.root / "outside.py").write_text("z = 1\n", encoding="utf-8")
+        names = git_diff_names(app)
+        self.assertEqual(names, ["src/lib.py"])
+        from actuallydone.config import Config
+        from actuallydone.hookrun import _watched
+        cfg = Config.load(app)
+        self.assertEqual(changed_paths(cfg), ["src/lib.py"])
+        self.assertTrue(_watched("src/lib.py", ["src"], [".py"]))
+        self.assertFalse(_watched("demo/app/src/lib.py", ["src"], [".py"]))
+
     def test_git含未跟踪新文件(self):
         self._py_project()
         subprocess.run(["git", "init"], cwd=self.root, check=True,

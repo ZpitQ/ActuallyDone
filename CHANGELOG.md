@@ -2,6 +2,15 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.16 — 2026-09-01
+
+- **嵌在父仓库里的项目 git 路径对不上 watch_roots**：`demo/pet-store-java`
+  这类布局里，`git status` / `git diff` 给出的是 `demo/pet-store-java/src/Foo.java`，
+  对 `watch_roots = ["src"]` 判不成受监视，stop 就写「dirty 与 git 都没有受监视改动」。
+  现在把路径收成相对 `adone.toml` 所在目录；父仓库里的兄弟文件不计入。
+- dirty 与 git 名单合并，不再「有 dirty 就不再看 git」。跳过时 hook.log 会写下
+  dirty/git 条数和例子，避免再对不上却看不出原因。
+
 ## v1.3.15 — 2026-09-01
 
 - **afterFileEdit 记不下 dirty**：只认 `file_path` 时，Cursor 给 `filePath` /

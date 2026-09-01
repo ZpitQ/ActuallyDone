@@ -1,6 +1,6 @@
 # ActuallyDone
 
-当前版本 **v1.3.15**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.16**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
@@ -178,8 +178,9 @@ adone gate run             # 全量，写回执
 adone gate check           # 树哈希必须对上 latest.json
 ```
 
-`--changed` 的文件名单：先读 `.adone/dirty`；没有再退到 `git diff --name-only HEAD`
-（人在 IDE 里改、钩子没记下时）。
+`--changed` 的文件名单：`.adone/dirty` 与 `git status`（含未跟踪）合并。
+路径一律相对 `adone.toml` 所在目录——项目嵌在父仓库里时，会剥掉
+`demo/pet-store-java/` 这种前缀，否则对不上 `watch_roots`。
 
 ### 钩子怎么触发（装上才会有）
 
@@ -191,7 +192,7 @@ adone install --hooks-only --force  # 升完 adone 或换了钩子口径时重�
 | 事件 | 钩子 | 做什么 |
 | --- | --- | --- |
 | `afterFileEdit` / `afterTabFileEdit` / `postToolUse`（Write 等） | `mark-dirty` | 受监视文件写入 `.adone/dirty`。认 `file_path` / `filePath` / `tool_input.path` 等 |
-| `stop`（每轮 Agent 说完） | `gate-guard` | 先看 dirty，没有再看 `git status`（含未跟踪新文件）。都没有受监视改动：不回推。有改动：跑 `--changed`；上一轮已通过且文件哈希没变则跳过 |
+| `stop`（每轮 Agent 说完） | `gate-guard` | dirty 与 `git status` 合并（路径相对项目根）。没有受监视改动：不回推。有改动：跑 `--changed`；上一轮已通过且文件哈希没变则跳过 |
 | `beforeShellExecution` 命中 `git commit` | `commit-guard` | 先 `gate check`；全量回执对不上则 `deny`（`--no-verify` 也拦） |
 | 本机 `git commit` | `.git/hooks/pre-commit` | 回执已新鲜则放行，否则跑全量 `gate run`，失败拒绝提交 |
 

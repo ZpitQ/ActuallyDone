@@ -16,35 +16,68 @@ from .gate import judge_step, read_dirty, run_step
 
 
 def changed_paths(cfg: Config, paths: list[str] | None = None) -> list[str]:
-    """优先用调用方给出的名单，其次 `.adone/dirty`，再退到 `git diff`。"""
+    """调用方名单，否则 dirty 与 git 合并（路径都相对 adone.toml 所在目录）。"""
     if paths:
         return _uniq(paths)
-    dirty = read_dirty(cfg)
-    if dirty:
-        return dirty
-    return git_diff_names(cfg.root)
+    return _uniq(read_dirty(cfg) + git_diff_names(cfg.root))
+
+
+def _git_toplevel(root: Path) -> Path | None:
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=root, capture_output=True, text=True, errors="replace",
+            timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    line = proc.stdout.strip()
+    return Path(line) if line else None
+
+
+def _porcelain_path(ln: str) -> str | None:
+    if len(ln) < 4:
+        return None
+    path = ln[3:]
+    if " -> " in path:
+        path = path.split(" -> ", 1)[-1]
+    rel = path.strip().strip('"').replace("\\", "/")
+    return rel or None
 
 
 def git_diff_names(root: Path) -> list[str]:
-    """已跟踪改动、暂存区、未跟踪新文件。新文件只靠 dirty 会漏掉。"""
+    """已跟踪改动、暂存区、未跟踪新文件。路径相对 `root`（adone.toml 目录）。
+
+    项目常嵌在父仓库里（例如 `demo/pet-store-java`）。git 给出的是仓库根路径
+    `demo/pet-store-java/src/Foo.java`，不剥前缀就会对不上 `watch_roots = ["src"]`。
+    """
+    top = _git_toplevel(root)
+    if top is None:
+        return []
     try:
         proc = subprocess.run(
-            ["git", "status", "--porcelain", "-uall"],
-            cwd=root, capture_output=True, text=True, errors="replace",
-            timeout=15)
+            ["git", "-C", str(top), "-c", "status.relativePaths=false",
+             "status", "--porcelain", "-uall"],
+            capture_output=True, text=True, errors="replace", timeout=15)
     except (OSError, subprocess.TimeoutExpired):
         return []
     if proc.returncode != 0:
         return []
+    root_r = root.resolve()
+    top_r = top.resolve()
     seen: list[str] = []
     for ln in proc.stdout.splitlines():
-        if len(ln) < 4:
+        raw = _porcelain_path(ln)
+        if not raw:
             continue
-        path = ln[3:]
-        if " -> " in path:
-            path = path.split(" -> ", 1)[-1]
-        rel = path.strip().strip('"').replace("\\", "/")
-        if rel and rel not in seen:
+        try:
+            rel = (top_r / raw).resolve().relative_to(root_r).as_posix()
+        except ValueError:
+            continue
+        if rel.startswith("../") or rel in (".", ""):
+            continue
+        if rel not in seen:
             seen.append(rel)
     return seen
 

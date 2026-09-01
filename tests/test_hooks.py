@@ -522,6 +522,41 @@ class TestHookrun(ProjectCase):
         self.assertIn("跳过", log)
         self.assertNotIn("改动没记下", log)
 
+    def test_gate_guard父仓库路径剥前缀后仍跑changed(self):
+        """demo/app 嵌在父 git 里时，status 是 demo/app/src/x.py，要对上 watch_roots=src。"""
+        app = self.root / "demo" / "app"
+        (app / "src").mkdir(parents=True)
+        (app / "src" / "lib.py").write_text("x = 1\n", encoding="utf-8")
+        (app / "adone.toml").write_text(
+            "version = 1\n[project]\nname = 'f'\necosystems = ['python']\n"
+            "[gate]\nwatch_roots = ['src']\nwatch_exts = ['.py']\n"
+            "min_tree_files = 1\n"
+            "[[gate.step]]\nname = 'py'\nkind = 'test'\nadapter = 'python'\n"
+            "argv = ['python3', '-m', 'unittest', 'discover', '-v']\n"
+            "[tests]\nadapter = 'python'\n",
+            encoding="utf-8")
+        subprocess.run(["git", "init"], cwd=self.root, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                        "add", "-A"], cwd=self.root, check=True,
+                        capture_output=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                        "commit", "-m", "i"], cwd=self.root, check=True,
+                        capture_output=True)
+        (app / "src" / "orphan.py").write_text("def orphan():\n    return 1\n",
+                                              encoding="utf-8")
+        env = dict(os.environ, CURSOR_PROJECT_DIR=str(app))
+        proc = subprocess.run(
+            [sys.executable, str(ADONE), "hook", "gate-guard"],
+            input=json.dumps({"status": "completed", "loop_count": 0}),
+            capture_output=True, text=True, env=env, cwd=app)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        got = json.loads(proc.stdout)
+        self.assertIn("followup_message", got)
+        self.assertIn("相关用例", got["followup_message"])
+        log = (app / ".adone" / "hook.log").read_text(encoding="utf-8")
+        self.assertNotIn("无一受监视", log)
+
     def test_gate_guard无dirty但git有受监视改动则跑changed(self):
         """afterFileEdit 记不下时，stop 必须退到 git，否则改很多代码也不跑增量。"""
         self.make_go_project()
