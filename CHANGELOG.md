@@ -2,6 +2,34 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.18 — 2026-09-01
+
+- **新增 `project.source_encoding`**：`adone init` / `detect` 采样受监视树自动判断
+  （`utf-8` / `gbk` / 混着放就 `auto`），写进 `adone.toml` 并标「请确认」，人可以改。
+  UTF-8 永远先试，这一项只决定解不动时退到哪；逐个文件判断，迁移期混编码也不怕。
+- **GBK 源码不再被读成乱码**：源码、文档、技能的读取统一走 `textio`。
+  GBK 尾字节范围含 ASCII，`亄`（81 7B）硬按 UTF-8 读会凭空多出一个 `{`，
+  大括号一乱就会切错函数体，"相关用例"因此少认几条却不报错。
+- `adone.toml` 自己不是 UTF-8 时给一句人话（TOML 规范只认 UTF-8），
+  并说明源码编码归 `source_encoding` 管。
+
+## v1.3.17 — 2026-09-01
+
+- **中文 Windows 上钩子读不动 payload**：`sys.stdin.read()` 按本机代码页解码，
+  cp936 把 UTF-8 的中文正文解坏（双字节前导会吞掉后面的引号），
+  于是每次编辑都记成「读不动 payload」，dirty 永远为空。改成按字节读，
+  依次试 BOM / UTF-8 / 本机编码；整串解不动就逐段捞 JSON；再不行用正则从原文
+  抽 `file_path`（路径是 ASCII，正文乱码也还在）。
+- **子目录是独立 git 仓库时 git 名单为空**：只在项目根跑 `git status` 的话，
+  `aics-bank/aics-api` 这类自带 `.git` 的子项目一条都看不到。现在按项目根与
+  各 `watch_roots` 分别定位仓库，逐个取名单再收回项目根的相对路径。
+- **git 的输出也按代码页解坏了**：git 的路径一律是 UTF-8，`text=True` 却按 cp936 解。
+  加上 git 默认把非 ASCII 路径转义成 `"\346\226\207"`，中文文件名根本对不上磁盘。
+  改成显式 UTF-8 解码 + `core.quotepath=false` + `-z`（顺带修好带空格和改名的路径）。
+- **git 不在钩子进程 PATH 上时不再装作干净**：找不到 git、不在仓库里、改动都在
+  项目目录外，这三种都会写进 hook.log，`gate run --changed` 也会打印原因。
+- Windows 上盘符大小写不一致时不再整批丢弃（改用不区分大小写的前缀比较）。
+
 ## v1.3.16 — 2026-09-01
 
 - **嵌在父仓库里的项目 git 路径对不上 watch_roots**：`demo/pet-store-java`

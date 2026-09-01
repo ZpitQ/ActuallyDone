@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -32,6 +33,7 @@ class Detected:
     tests_adapter: str = ""
     tests_roots: list[str] = field(default_factory=list)
     docs: list[str] = field(default_factory=list)
+    source_encoding: str = "auto"
     skills_dir: str = ""
     hooks_file: str = ""
     notes: list[str] = field(default_factory=list)
@@ -86,11 +88,43 @@ def detect(root: Path) -> Detected:
     if (root / ".cursor" / "hooks.json").exists():
         got.hooks_file = ".cursor/hooks.json"
 
+    got.source_encoding = _sniff_encoding(got)
+
     if not got.ecosystems:
         got.notes.append("一个生态都没认出来（找不到 go.mod / package.json / "
                          "pyproject.toml / pom.xml / build.gradle / CMakeLists.txt）："
                          "门禁步骤要手工填")
     return got
+
+
+def _sniff_encoding(got: Detected) -> str:
+    """按受监视树采样判断源码编码。看不出来就 auto，不替用户下结论。"""
+    from .textio import sniff
+    files: list[Path] = []
+    exts = {e if e.startswith(".") else f".{e}" for e in got.watch_exts}
+    for r in (got.watch_roots or ["."]):
+        base = got.root / r
+        if not base.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [d for d in dirnames if d not in IGNORE_DIRS]
+            for fn in filenames:
+                if not exts or os.path.splitext(fn)[1] in exts:
+                    files.append(Path(dirpath) / fn)
+            if len(files) > 400:
+                break
+        if len(files) > 400:
+            break
+    enc, tally = sniff(files)
+    if tally["gbk"]:
+        got.notes.append(
+            f"源码里有 {tally['gbk']} 个文件不是 UTF-8（能按 GBK 解）："
+            f"project.source_encoding 写成 {enc}")
+    elif tally["unknown"]:
+        got.notes.append(
+            f"{tally['unknown']} 个文件 UTF-8 和 GBK 都解不动："
+            f"source_encoding 留成 auto，逐个文件试")
+    return enc
 
 
 # --------------------------------------------------------------------------- 生成配置
@@ -117,6 +151,10 @@ def render_config(got: Detected) -> str:
     a('state_dir = ".adone"       # 机器写的：回执、覆盖率 profile、报告')
     a('material_dir = "adone"     # 人写的：验收契约、需求台账')
     a(f"skills_dir = {q(got.skills_dir)}")
+    a("# 源码解不动 UTF-8 时按什么解：utf-8 / gbk / auto（auto 再加本机编码）。")
+    a("# UTF-8 永远先试，逐个文件判断。只影响读文本的检查；")
+    a("# 回执的树哈希按字节算，与这一项无关。")
+    a(f"source_encoding = {q(got.source_encoding)}    # 请确认：探测所得")
     a("")
     a("[gate]")
     a("# 受监视代码树：回执的树哈希由这些文件的内容算出。改了这里面任何文件，回执即过期。")
@@ -415,6 +453,7 @@ def cmd_detect(args) -> int:
     print(f"  受监视：{'、'.join(got.watch_roots) or '无'}  后缀 {' '.join(got.watch_exts)}")
     print(f"  测试：适配器 {got.tests_adapter or '无'}，根 {'、'.join(got.tests_roots) or '无'}")
     print(f"  文档：{'、'.join(got.docs) or '无'}")
+    print(f"  源码编码：{got.source_encoding}")
     for n in got.notes:
         print(f"  · {n}")
 

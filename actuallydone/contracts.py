@@ -11,6 +11,7 @@ import tomllib
 from pathlib import Path
 
 from .config import Config
+from .textio import read as read_source
 
 
 def load_contracts(cfg: Config) -> list[tuple[Path, dict]]:
@@ -131,7 +132,7 @@ def check_impl_ref(cfg: Config, prefix: str, impl: str) -> list[str]:
     if not target.exists():
         return [f"{prefix}：impl 指向的文件不存在（{m.group(1)}）"]
     if m.group(2):
-        total = len(target.read_text(encoding="utf-8", errors="replace").splitlines())
+        total = len(read_source(target).splitlines())
         if int(m.group(2)) > total:
             return [f"{prefix}：impl 行号越界（{impl}，该文件只有 {total} 行）"]
     return []

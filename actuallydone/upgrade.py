@@ -185,7 +185,9 @@ def upgrade_target() -> tuple[str, Path, str]:
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    # git 的输出是 UTF-8，而 text=True 默认按本机代码页解（中文 Windows 是 cp936）
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True,
+                          encoding="utf-8", errors="replace")
 
 
 def git_blockers(root: Path) -> list[str]:

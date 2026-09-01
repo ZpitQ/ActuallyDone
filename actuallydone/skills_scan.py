@@ -10,6 +10,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from .textio import read as read_source
 
 # SKILL.md 体积阈值：软阈值是经验值，硬阈值来自 Cursor 官方建议
 SOFT_LINE_LIMIT = 120
@@ -99,14 +100,14 @@ def doc_lines(path: Path | None) -> set[str]:
     """权威文档里的长行，用来发现技能里的逐字复制（违反单一事实来源）。"""
     if not path or not path.exists():
         return set()
-    return {ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()
+    return {ln.strip() for ln in read_source(path).splitlines()
             if len(ln.strip()) >= 30}
 
 
 def check_skill(d: Path, root: Path, agent_lines: set[str],
                 invariant_re: re.Pattern | None = None) -> SkillReport:
     skill_md = d / "SKILL.md"
-    text = skill_md.read_text(encoding="utf-8")
+    text = read_source(skill_md)
     front, body = parse_frontmatter(text)
     rep = SkillReport(
         name=front.get("name", d.name),
@@ -152,7 +153,7 @@ def check_skill(d: Path, root: Path, agent_lines: set[str],
     # --- references 与链接 ---
     ref_dir = d / "references"
     ref_files = sorted(p for p in ref_dir.glob("*.md")) if ref_dir.is_dir() else []
-    rep.refs = [(p.name, len(p.read_text(encoding="utf-8").splitlines())) for p in ref_files]
+    rep.refs = [(p.name, len(read_source(p).splitlines())) for p in ref_files]
 
     linked: set[str] = set()
     for target in MD_LINK_RE.findall(body):
@@ -169,7 +170,7 @@ def check_skill(d: Path, root: Path, agent_lines: set[str],
 
     # 引用只做一层深：references 里不该再指向别的 references
     for p in ref_files:
-        for target in MD_LINK_RE.findall(p.read_text(encoding="utf-8")):
+        for target in MD_LINK_RE.findall(read_source(p)):
             if target.startswith("references/"):
                 add(Issue("警告", rep.name, f"references/{p.name}",
                           f"二层引用 {target}，深层引用可能只被读到一半"))
@@ -191,7 +192,7 @@ def check_skill(d: Path, root: Path, agent_lines: set[str],
 
     # --- 引用的仓库代码路径是否还在 ---
     for p in [skill_md, *ref_files]:
-        content = p.read_text(encoding="utf-8")
+        content = read_source(p)
         rel = p.relative_to(d)
         for path_str, lineno in path_re.findall(content):
             target = next((c for c in (root / path_str, d / path_str) if c.exists()),
@@ -201,7 +202,7 @@ def check_skill(d: Path, root: Path, agent_lines: set[str],
                 add(Issue("错误", rep.name, str(rel), f"引用的代码路径已不存在：{path_str}"))
                 continue
             if lineno:
-                total = len(target.read_text(encoding="utf-8", errors="replace").splitlines())
+                total = len(read_source(target).splitlines())
                 if int(lineno) > total:
                     rep.code_refs_bad.append(f"{rel}: {path_str}:{lineno}（只有 {total} 行）")
                     add(Issue("错误", rep.name, str(rel),

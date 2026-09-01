@@ -8,7 +8,9 @@ macOS / Linux 登记 `python3 -m actuallydone hook …`，不写 .cmd。
 
 from __future__ import annotations
 
+import codecs
 import json
+import locale
 import os
 import re
 import sys
@@ -21,14 +23,98 @@ from .config import Config, ConfigError, find_root
 MAX_LOOPS = 3
 
 
-def _payload() -> dict:
-    raw = sys.stdin.read()
-    if raw.startswith("\ufeff"):
-        raw = raw[1:]
+def read_stdin_bytes() -> bytes:
+    """按字节读 stdin。
+
+    绝不用 `sys.stdin.read()`：那按本机代码页解码。中文 Windows 是 cp936，
+    把 UTF-8 的中文当 cp936 解，双字节前导会吞掉后面那个 ASCII 字节——
+    正好是 JSON 的引号或逗号，于是「payload 读不动」，改动全丢。
+    """
+    buf = getattr(sys.stdin, "buffer", None)
     try:
-        return json.loads(raw or "{}")
-    except (ValueError, OSError):
-        return {}
+        if buf is not None:
+            return buf.read() or b""
+        return (sys.stdin.read() or "").encode("utf-8", "surrogateescape")
+    except (OSError, ValueError, UnicodeError):
+        return b""
+
+
+def decode_stdin(data: bytes) -> str:
+    """把钩子 stdin 解成文本。Cursor 发 UTF-8，但 BOM / UTF-16 都遇到过。"""
+    if data.startswith(codecs.BOM_UTF8):
+        data = data[len(codecs.BOM_UTF8):]
+    elif data.startswith(codecs.BOM_UTF16_LE) or data.startswith(codecs.BOM_UTF16_BE):
+        try:
+            return data.decode("utf-16")
+        except UnicodeDecodeError:
+            pass
+    for enc in ("utf-8", locale.getpreferredencoding(False) or "utf-8", "cp1252"):
+        try:
+            return data.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode("utf-8", "replace")
+
+
+def parse_payload(text: str):
+    """解析钩子 payload，返回 (对象, 说明)。解不动返回 (None, 原因)。
+
+    整串解不动时按 JSON 文档逐个捞：见过前后带杂字节、多个对象连着发的情况。
+    """
+    t = text.lstrip("\ufeff").strip()
+    if not t:
+        return None, "empty"
+    try:
+        return json.loads(t), ""
+    except ValueError:
+        pass
+    dec = json.JSONDecoder()
+    found: list = []
+    i = 0
+    while i < len(t):
+        if t[i] not in "{[":
+            i += 1
+            continue
+        try:
+            obj, end = dec.raw_decode(t, i)
+        except ValueError:
+            i += 1
+            continue
+        found.append(obj)
+        i = end
+    if not found:
+        return None, "unparsable"
+    return (found[0] if len(found) == 1 else found), f"捞回 {len(found)} 段"
+
+
+# payload 解不动时的最后一招：路径本身是 ASCII，即使正文乱码也还在。
+_PATH_RE = re.compile(
+    r'"(?:file_path|filePath|filepath|path|uri|target_file|targetFile)"'
+    r'\s*:\s*"((?:[^"\\]|\\.)*)"')
+_EVENT_RE = re.compile(r'"(?:hook_event_name|event)"\s*:\s*"([^"]*)"')
+
+
+def paths_from_text(text: str) -> list[str]:
+    out: list[str] = []
+    for raw in _PATH_RE.findall(text):
+        try:
+            val = json.loads(f'"{raw}"')
+        except ValueError:
+            continue
+        got = _as_path(val)
+        if got and got not in out:
+            out.append(got)
+    return out
+
+
+def _sample(text: str, n: int = 160) -> str:
+    flat = " ".join(text.split())
+    return (flat[:n] + "…") if len(flat) > n else flat
+
+
+def _payload() -> dict:
+    payload, _ = parse_payload(decode_stdin(read_stdin_bytes()))
+    return payload if isinstance(payload, dict) else {}
 
 
 def _root() -> Path:
@@ -171,28 +257,29 @@ def _append_dirty(cfg: Config | None, root: Path, rel: str) -> None:
 def cmd_mark_dirty(_args=None) -> int:
     cfg, root = _load()
     _log(cfg, "mark-dirty", "launched", root)
-    raw = sys.stdin.read()
-    if raw.startswith("\ufeff"):
-        raw = raw[1:]
-    try:
-        payload = json.loads(raw or "{}")
-    except (ValueError, OSError) as e:
-        _log(cfg, "afterFileEdit",
-             f"读不动 payload（{type(e).__name__} stdin={len(raw)}B），改动没记下", root)
-        return _emit({})
+    data = read_stdin_bytes()
+    raw = decode_stdin(data)
+    payload, note = parse_payload(raw)
 
     event = ""
     if isinstance(payload, dict):
         event = str(payload.get("hook_event_name") or payload.get("event") or "")
-    paths = paths_from_payload(payload)
+    if not event:
+        m = _EVENT_RE.search(raw)
+        event = m.group(1) if m else ""
+
+    paths = paths_from_payload(payload) if payload is not None else []
     if not paths:
-        keys = list(payload) if isinstance(payload, dict) else [type(payload).__name__]
-        if event in _SKIP_EVENTS or (not raw.strip() and not event):
+        # 解析失败或字段没认出来时，路径本身仍是 ASCII，直接从原文捞
+        paths = paths_from_text(raw)
+    if not paths:
+        if event in _SKIP_EVENTS or not raw.strip():
             _log(cfg, "afterFileEdit", f"{event or 'empty'} 无路径，跳过", root)
         else:
+            keys = list(payload) if isinstance(payload, dict) else type(payload).__name__
             _log(cfg, "afterFileEdit",
-                 f"payload 无路径（keys={keys} event={event} stdin={len(raw)}B），改动没记下",
-                 root)
+                 f"payload 无路径（{note or 'ok'} keys={keys} event={event} "
+                 f"stdin={len(data)}B）：{_sample(raw)}", root)
         return _emit({})
 
     base = cfg.root if cfg is not None else root
@@ -211,7 +298,12 @@ def cmd_mark_dirty(_args=None) -> int:
         except OSError as e:
             _log(cfg, "afterFileEdit", f"写 dirty 失败（{e}）：{rel}", root)
     if noted:
-        _log(cfg, "afterFileEdit", f"记下 {'、'.join(noted[:8])}", root)
+        tail = f"（{note}）" if note else ""
+        _log(cfg, "afterFileEdit", f"记下 {'、'.join(noted[:8])}{tail}", root)
+    else:
+        _log(cfg, "afterFileEdit",
+             f"{len(paths)} 个路径都不在受监视树里（roots={roots} exts={exts}）："
+             f"{'、'.join(paths[:4])}", root)
     return _emit({})
 
 
@@ -250,18 +342,18 @@ def cmd_gate_guard(_args=None) -> int:
             "（或它的子目录），再谈完成。",
         ])})
 
-    from .changed import changed_paths, git_diff_names, run_changed, same_as_last_ok_partial
+    from .changed import changed_paths, git_changed, run_changed, same_as_last_ok_partial
     from .gate import read_dirty
     roots = cfg.get("gate.watch_roots") or ["."]
     exts = cfg.get("gate.watch_exts") or []
     dirty = read_dirty(cfg)
-    git_files = git_diff_names(cfg.root)
+    git_files, git_note = git_changed(cfg)
     files = [f for f in changed_paths(cfg) if _watched(f, roots, exts)]
     if not files:
         preview = "、".join((dirty or git_files)[:6]) or "空"
         _log(cfg, "stop",
-             f"dirty {len(dirty)} / git {len(git_files)} 条，无一受监视"
-             f"（roots={roots} exts={exts} 例如 {preview}），不回推", root)
+             f"dirty {len(dirty)} / git {len(git_files)} 条（git：{git_note}），"
+             f"无一受监视（roots={roots} exts={exts} 例如 {preview}），不回推", root)
         return _emit({})
     if same_as_last_ok_partial(cfg, files):
         _log(cfg, "stop", f"相关用例已通过且文件未再改（{len(files)}），跳过", root)

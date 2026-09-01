@@ -1,6 +1,6 @@
 # ActuallyDone
 
-当前版本 **v1.3.16**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.18**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
@@ -110,6 +110,21 @@ adone health --open                # 出一页健康度报告并打开
 
 `adone init` 探测出来的项都标着「请确认」。覆盖率下限留空，等你跑完门禁拿实测值回填。
 
+源码编码也在探测之列，写在 `project.source_encoding`：
+
+```toml
+[project]
+source_encoding = "gbk"    # utf-8 / gbk / auto，请确认：探测所得
+```
+
+UTF-8 永远先试，这一项决定解不动时退到哪（`auto` 再加本机编码），逐个文件判断，
+所以迁移期两种编码混着放也没问题。它只影响读文本的检查；
+回执的树哈希按字节算，与编码无关。
+
+GBK 项目上这不是可有可无的：GBK 的尾字节范围含 ASCII，`亄` 是 `81 7B`，
+硬按 UTF-8 读会凭空多出一个 `{`，大括号一乱，扫测试方法就会切错函数体——
+结果是「相关用例」少认几条，而这和「这文件本来就没测试」长得一模一样。
+
 ### 装完之后长这样
 
 ```
@@ -179,8 +194,12 @@ adone gate check           # 树哈希必须对上 latest.json
 ```
 
 `--changed` 的文件名单：`.adone/dirty` 与 `git status`（含未跟踪）合并。
-路径一律相对 `adone.toml` 所在目录——项目嵌在父仓库里时，会剥掉
-`demo/pet-store-java/` 这种前缀，否则对不上 `watch_roots`。
+git 会在项目根和每个 `watch_roots` 各定位一次仓库，所以子目录自带 `.git`
+（`aics-bank/aics-api` 这种）也扫得到。路径一律收成相对 `adone.toml` 所在目录：
+项目嵌在父仓库里时剥掉 `demo/pet-store-java/` 前缀，否则对不上 `watch_roots`。
+
+名单为空时会说明原因（PATH 里没有 git / 不在仓库里 / 改动都在项目目录外），
+不会让「钩子失效」看起来像「代码没改过」。
 
 ### 钩子怎么触发（装上才会有）
 
@@ -191,7 +210,7 @@ adone install --hooks-only --force  # 升完 adone 或换了钩子口径时重�
 
 | 事件 | 钩子 | 做什么 |
 | --- | --- | --- |
-| `afterFileEdit` / `afterTabFileEdit` / `postToolUse`（Write 等） | `mark-dirty` | 受监视文件写入 `.adone/dirty`。认 `file_path` / `filePath` / `tool_input.path` 等 |
+| `afterFileEdit` / `afterTabFileEdit` / `postToolUse`（Write 等） | `mark-dirty` | 受监视文件写入 `.adone/dirty`。认 `file_path` / `filePath` / `tool_input.path` 等；stdin 按字节读（中文 Windows 的 cp936 会把 UTF-8 正文解坏），解不动就从原文正则抽路径 |
 | `stop`（每轮 Agent 说完） | `gate-guard` | dirty 与 `git status` 合并（路径相对项目根）。没有受监视改动：不回推。有改动：跑 `--changed`；上一轮已通过且文件哈希没变则跳过 |
 | `beforeShellExecution` 命中 `git commit` | `commit-guard` | 先 `gate check`；全量回执对不上则 `deny`（`--no-verify` 也拦） |
 | 本机 `git commit` | `.git/hooks/pre-commit` | 回执已新鲜则放行，否则跑全量 `gate run`，失败拒绝提交 |

@@ -492,6 +492,62 @@ class TestHookrun(ProjectCase):
         self.assertIn("internal/calc.go",
                       (self.root / ".adone" / "dirty").read_text(encoding="utf-8"))
 
+    def fire_bytes(self, name: str, data: bytes) -> dict:
+        env = dict(os.environ, CURSOR_PROJECT_DIR=str(self.root))
+        proc = subprocess.run(
+            [sys.executable, str(ADONE), "hook", name],
+            input=data, capture_output=True, env=env, cwd=self.root)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+        return json.loads(proc.stdout.decode("utf-8"))
+
+    def _watch_go(self) -> None:
+        self.make_go_project()
+        self.write("adone.toml",
+                   "version = 1\n[project]\nname = 'f'\n"
+                   "[gate]\nwatch_roots = ['internal']\nwatch_exts = ['.go']\n")
+
+    def _dirty(self) -> str:
+        p = self.root / ".adone" / "dirty"
+        return p.read_text(encoding="utf-8") if p.exists() else ""
+
+    def test_mark_dirty按字节读不受本机代码页影响(self):
+        """中文 Windows 上 sys.stdin 按 cp936 解 UTF-8，双字节前导会吞掉 JSON 的引号。"""
+        self._watch_go()
+        payload = {"hook_event_name": "afterFileEdit",
+                   "file_path": str(self.root / "internal/calc.go"),
+                   "edits": [{"old_string": "账户余额不足，拒绝下单",
+                              "new_string": "账户余额不足：拒绝下单并记账"}]}
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.assertEqual(self.fire_bytes("mark-dirty", data), {})
+        self.assertIn("internal/calc.go", self._dirty())
+
+    def test_mark_dirty在payload解不动时仍捞出路径(self):
+        """截断、引号被吞：JSON 解不动，但路径是 ASCII，还在原文里，必须记下。"""
+        self._watch_go()
+        payload = {"hook_event_name": "afterFileEdit",
+                   "file_path": str(self.root / "internal/calc.go"),
+                   "edits": [{"new_string": "账户余额不足，拒绝下单"}]}
+        good = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        truncated = good[:-12]
+        swallowed = good.replace(b'"edits"', b'edits"')
+        for broken in (truncated, swallowed):
+            (self.root / ".adone" / "dirty").unlink(missing_ok=True)
+            with self.assertRaises(ValueError):
+                json.loads(broken.decode("utf-8", "replace"))
+            self.assertEqual(self.fire_bytes("mark-dirty", broken), {})
+            self.assertIn("internal/calc.go", self._dirty(), broken[:40])
+
+    def test_mark_dirty认BOM与UTF16与多段JSON(self):
+        self._watch_go()
+        one = json.dumps({"file_path": str(self.root / "internal/calc.go")})
+        two = json.dumps({"file_path": str(self.root / "internal/calc_test.go")})
+        for data in (b"\xef\xbb\xbf" + one.encode("utf-8"),
+                     one.encode("utf-16"),
+                     (one + "\n" + two).encode("utf-8")):
+            (self.root / ".adone" / "dirty").unlink(missing_ok=True)
+            self.assertEqual(self.fire_bytes("mark-dirty", data), {})
+            self.assertIn("internal/calc.go", self._dirty(), data[:16])
+
     def test_mark_dirty认filePath与嵌套tool_input(self):
         """Cursor 有的版本给 filePath / tool_input.path，只认 file_path 就永远记不下。"""
         self.make_go_project()

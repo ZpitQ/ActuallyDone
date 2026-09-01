@@ -126,7 +126,8 @@ class Adapter:
 # ------------------------------------------------------------------ 共用工具
 
 def read(path: Path) -> str:
-    return path.read_text(encoding="utf-8", errors="replace")
+    from ..textio import read as read_text
+    return read_text(path)
 
 
 def companion_stems(stem: str) -> tuple[str, ...]:

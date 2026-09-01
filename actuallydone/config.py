@@ -44,6 +44,9 @@ DEFAULTS: dict[str, Any] = {
         "state_dir": ".adone",
         "material_dir": "adone",
         "skills_dir": ".cursor/skills",
+        # 源码解不动 UTF-8 时按什么解（utf-8 / gbk / auto）。UTF-8 永远先试。
+        # 树哈希按字节算，跟这个无关；它只影响读文本的那些检查。
+        "source_encoding": "auto",
     },
     "gate": {
         "watch_roots": [],
@@ -128,13 +131,24 @@ class Config:
         p = r / CONFIG_NAME
         try:
             raw = tomllib.loads(p.read_text(encoding="utf-8"))
+        except UnicodeDecodeError as e:
+            raise ConfigError(
+                f"{p} 不是 UTF-8（{e.reason}）。TOML 规范只认 UTF-8，"
+                f"把这个文件另存为 UTF-8 即可；源码是 GBK 没关系，"
+                f"那由 project.source_encoding 管。") from e
         except Exception as e:
             raise ConfigError(f"{p} 解析失败：{e}") from e
-        return cls(root=r.resolve(), data=deep_merge(DEFAULTS, raw), path=p)
+        return cls(root=r.resolve(), data=deep_merge(DEFAULTS, raw), path=p)._applied()
 
     @classmethod
     def from_dict(cls, root: Path, raw: dict) -> "Config":
-        return cls(root=root.resolve(), data=deep_merge(DEFAULTS, raw))
+        return cls(root=root.resolve(), data=deep_merge(DEFAULTS, raw))._applied()
+
+    def _applied(self) -> "Config":
+        """把项目级设置下发给全局读取口。读源码的地方遍布各处，不逐个传参。"""
+        from . import textio
+        textio.set_default(self.get("project.source_encoding"))
+        return self
 
     # ---------------------------------------------------------------- 取值
 

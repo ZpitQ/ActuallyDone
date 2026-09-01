@@ -8,8 +8,9 @@ from io import StringIO
 from contextlib import redirect_stdout
 
 from actuallydone.adapters.base import Adapter
-from actuallydone.changed import (changed_paths, file_hashes, git_diff_names,
-                                   run_changed, same_as_last_ok_partial)
+from actuallydone.changed import (changed_paths, file_hashes, git_changed,
+                                   git_diff_names, run_changed,
+                                   same_as_last_ok_partial)
 from actuallydone.install import PRE_COMMIT_MARK, cmd_install
 from tests.helpers import ProjectCase
 from tests.test_hooks import _args
@@ -120,6 +121,74 @@ class TestRelatedRun(ProjectCase):
         self.assertEqual(changed_paths(cfg), ["src/lib.py"])
         self.assertTrue(_watched("src/lib.py", ["src"], [".py"]))
         self.assertFalse(_watched("demo/app/src/lib.py", ["src"], [".py"]))
+
+    def test_子项目是独立仓库时父目录也要扫到(self):
+        """watch_roots 指向的子目录常常各自是 git 仓库，父目录 status 一条都看不到。"""
+        sub = self.root / "aics-bank" / "aics-api"
+        (sub / "src").mkdir(parents=True)
+        (sub / "src" / "lib.py").write_text("x = 1\n", encoding="utf-8")
+        self.write("adone.toml",
+                   "version = 1\n[project]\nname = 'f'\n"
+                   "[gate]\nwatch_roots = ['.', 'aics-bank/aics-api']\n"
+                   "watch_exts = ['.py']\n")
+        subprocess.run(["git", "init"], cwd=sub, check=True, capture_output=True)
+        from actuallydone.config import Config
+        from actuallydone.hookrun import _watched
+        cfg = Config.load(self.root)
+        files, note = git_changed(cfg)
+        self.assertIn("aics-bank/aics-api/src/lib.py", files, note)
+        self.assertTrue(_watched("aics-bank/aics-api/src/lib.py", ["."], [".py"]))
+
+    def test_中文文件名与带空格路径都要原样拿到(self):
+        """git 默认把非 ASCII 路径转义成 \\346\\226\\207，按代码页解还会再坏一次。"""
+        self._py_project()
+        (self.root / "订单 模块").mkdir()
+        (self.root / "订单 模块" / "计价.py").write_text("x = 1\n", encoding="utf-8")
+        subprocess.run(["git", "init"], cwd=self.root, check=True,
+                       capture_output=True)
+        from actuallydone.config import Config
+        files, note = git_changed(Config.load(self.root))
+        self.assertIn("订单 模块/计价.py", files, note)
+
+    def test_改名条目只取新路径(self):
+        self._py_project()
+        subprocess.run(["git", "init"], cwd=self.root, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                        "add", "-A"], cwd=self.root, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                        "commit", "-m", "i"], cwd=self.root, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "mv", "lib.py", "lib2.py"], cwd=self.root,
+                       check=True, capture_output=True)
+        from actuallydone.config import Config
+        files, note = git_changed(Config.load(self.root))
+        self.assertIn("lib2.py", files, note)
+        self.assertNotIn("lib.py", files, note)
+
+    def test_没有git仓库时说明原因(self):
+        self._py_project()
+        from actuallydone.config import Config
+        files, note = git_changed(Config.load(self.root))
+        self.assertEqual(files, [])
+        self.assertIn("仓库", note)
+
+    def test_git不在PATH上时说明原因(self):
+        self._py_project()
+        from actuallydone.config import Config
+        import actuallydone.changed as mod
+        orig = mod.shutil.which
+        mod.shutil.which = lambda *_a, **_k: None
+        orig_fallbacks = mod._GIT_FALLBACKS
+        mod._GIT_FALLBACKS = ()
+        try:
+            files, note = git_changed(Config.load(self.root))
+        finally:
+            mod.shutil.which = orig
+            mod._GIT_FALLBACKS = orig_fallbacks
+        self.assertEqual(files, [])
+        self.assertIn("没有 git", note)
 
     def test_git含未跟踪新文件(self):
         self._py_project()

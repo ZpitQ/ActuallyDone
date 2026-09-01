@@ -140,7 +140,8 @@ class GoAdapter(Adapter):
         from ..gate import launch_argv, resolve_cmd
         exe = resolve_cmd("go", cwd) or "go"
         proc = subprocess.run(launch_argv(exe, ["tool", "cover", f"-func={str(profile)}"]),
-                              cwd=cwd, capture_output=True, text=True)
+                              cwd=cwd, capture_output=True, text=True,
+                              errors="replace")
         if proc.returncode != 0:
             return None
         rows = [ln.split() for ln in proc.stdout.splitlines() if ln.strip()]

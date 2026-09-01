@@ -12,6 +12,7 @@ from pathlib import Path
 from ..adapters import CAP_COVERAGE, CAP_FUNCS, get
 from ..extractors import EXTRACTORS, extract, sql_dropped_tables
 from ..model import DimResult, Metric
+from ..textio import read as read_source
 
 
 def run(ctx) -> DimResult:
@@ -106,7 +107,7 @@ def _unused(cfg, res: DimResult) -> int:
         defined: dict[str, str] = {}
         used: set[str] = set()
         for p in sorted(cfg.root.glob(glob)):
-            text = p.read_text(encoding="utf-8", errors="replace")
+            text = read_source(p)
             for name in def_re.findall(text):
                 defined[name if isinstance(name, str) else name[0]] = p.name
             used |= {n if isinstance(n, str) else n[0] for n in use_re.findall(text)}
@@ -165,7 +166,7 @@ def _size_and_marks(cfg, res: DimResult) -> tuple[list[str], int]:
         for f in cfg.root.glob(pat):
             if not f.is_file():
                 continue
-            n = len(f.read_text(encoding="utf-8", errors="replace").splitlines())
+            n = len(read_source(f).splitlines())
             if n > limit:
                 big.append((str(f.relative_to(cfg.root)), n))
     if big:
@@ -181,8 +182,7 @@ def _size_and_marks(cfg, res: DimResult) -> tuple[list[str], int]:
         for pat in cfg.get("code.mark_globs", []) or []:
             for f in cfg.root.glob(pat):
                 if f.is_file():
-                    marks += len(mark_re.findall(
-                        f.read_text(encoding="utf-8", errors="replace")))
+                    marks += len(mark_re.findall(read_source(f)))
     return [p for p, _ in big], marks
 
 

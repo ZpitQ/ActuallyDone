@@ -10,6 +10,7 @@ import re
 
 from ..extractors import extract, route_known
 from ..model import DimResult, Metric
+from ..textio import read as read_source
 
 
 def run(ctx) -> DimResult:
@@ -101,7 +102,7 @@ def run(ctx) -> DimResult:
         if not (f_rel and pattern and p.exists()):
             res.add("警告", "adone.toml", f"docs.claim 配置不完整或文件不存在：{f_rel}")
             continue
-        m = re.search(pattern, p.read_text(encoding="utf-8", errors="replace"))
+        m = re.search(pattern, read_source(p))
         if not m:
             continue
         got = _actual_value(cfg, actual)
@@ -136,7 +137,7 @@ def run(ctx) -> DimResult:
     idx_md = cfg.skills_dir / "README.md"
     if idx_md.exists():
         did_anything = True
-        txt = idx_md.read_text(encoding="utf-8")
+        txt = read_source(idx_md)
         for d in sorted(cfg.skills_dir.iterdir()):
             if d.is_dir() and (d / "SKILL.md").exists() and d.name not in txt:
                 res.add("警告", str(idx_md.relative_to(cfg.root)), f"索引里没有 {d.name}")

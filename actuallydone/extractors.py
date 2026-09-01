@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Callable
+from .textio import read as read_source
 
 COMMENT_PREFIXES = ("--", "//", "#", "*", "/*")
 
@@ -19,7 +20,7 @@ _OPENAPI_PATH_RE = re.compile(r"^  (/\S+):", re.M)
 
 
 def read(path: Path) -> str:
-    return path.read_text(encoding="utf-8", errors="replace")
+    return read_source(path)
 
 
 def _code_lines(text: str) -> list[str]:

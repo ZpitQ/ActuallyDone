@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import Config
+from .textio import read as read_source
 
 # 文档里声明覆盖率下限的写法，例如「覆盖率 ≥ 85%」「不低于 85%」「基线 85.9%」
 DOC_THRESHOLD_RE = re.compile(r"(?:≥|>=|不低于|下限|基线)\s*(\d{2}(?:\.\d)?)\s*%")
@@ -29,7 +30,7 @@ def _scan_adapter(cfg: Config, ad, roots: list[Path], exempt: set[str],
             rel = p.relative_to(cfg.root).as_posix()
         except ValueError:
             rel = p.as_posix()
-        text = p.read_text(encoding="utf-8", errors="replace")
+        text = read_source(p)
         n = ad.skip_sites(text)
         if n:
             skip_sites[rel] = skip_sites.get(rel, 0) + n
@@ -76,7 +77,7 @@ def declared_thresholds(cfg: Config) -> dict[str, float]:
         if not p.exists():
             continue
         vals = [float(v) for v in
-                DOC_THRESHOLD_RE.findall(p.read_text(encoding="utf-8", errors="replace"))]
+                DOC_THRESHOLD_RE.findall(read_source(p))]
         if vals:
             out[rel] = min(vals)
     return out
