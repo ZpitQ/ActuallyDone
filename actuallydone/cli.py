@@ -106,6 +106,11 @@ def cmd_install(args) -> int:
     return run(_cfg(args), args)
 
 
+def cmd_clean(args) -> int:
+    from .clean import cmd_clean as run
+    return run(args)
+
+
 def cmd_upgrade(args) -> int:
     from .upgrade import cmd_upgrade as run
     return run(args)
@@ -236,6 +241,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="覆盖已存在的技能文件")
     p.add_argument("--dry-run", action="store_true", help="只说要做什么，不落盘")
     p.set_defaults(func=cmd_install)
+
+    p = sub.add_parser("clean", help="拆除当前项目里的 ActuallyDone（和 init 配套）")
+    p.add_argument("--root", help="项目根，默认从当前目录往上找 adone.toml")
+    p.add_argument("--yes", action="store_true", help="不交互，直接拆")
+    p.add_argument("--dry-run", action="store_true", help="只说要删什么，不落盘")
+    p.set_defaults(func=cmd_clean)
 
     p = sub.add_parser("hook", help="给 Cursor 钩子调用：逻辑在包里，不在 .cursor/hooks/*.py")
     p.add_argument("hook", choices=["mark-dirty", "gate-guard", "commit-guard"],

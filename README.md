@@ -1,6 +1,6 @@
 # ActuallyDone - adone
 
-当前版本 **v1.3.20**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.21**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
@@ -134,6 +134,15 @@ adone policy                       # 确认判据基线（首次 gate run 会自
 adone install --with-hooks         # 技能 + 钩子 + 本机 .git/hooks/pre-commit
 adone health --open                # 出一页健康度报告并打开
 ```
+
+要拆掉（和 `init` 配套，拆完门禁和钩子都不再跑）：
+
+```bash
+adone clean                        # 先列出要删的，默认不拆
+adone clean --yes                  # 不交互
+```
+
+别人写在 `hooks.json` 里的钩子、以及不是 adone 渲染的技能，不会动。
 
 `adone init` 探测出来的项都标着「请确认」。覆盖率下限留空，等你跑完门禁拿实测值回填。
 
@@ -599,6 +608,12 @@ A：新接入一门生态用 `adone detect --merge`。不要用 `--write` 覆盖
 **Q：问一句设计、没改代码，也被推去跑全量测试？**  
 A：那是 1.3.14 之前的设计：把每一轮 `stop` 当成「宣称完成」。现在的配置和用法见第 5 节。
 升完要 `adone install --hooks-only --force`，否则项目里还是旧钩子。
+
+<br/>
+
+**Q：怎么把项目里的 adone 拆干净？**  
+A：`adone clean`。它拆配置、回执、我们装的钩子和技能、本机 pre-commit。
+别人的钩子不动。拆完要重新接入再 `adone init`。
 
 <br/>
 
