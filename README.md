@@ -1,6 +1,6 @@
 # ActuallyDone
 
-当前版本 **v1.3.18**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.19**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
@@ -182,6 +182,10 @@ GBK 项目上这不是可有可无的：GBK 的尾字节范围含 ASCII，`亄` 
 
 `hooks.json` 的 `command` 是安装那台机器写的，**不要把别人的登记当通用配置提交。**
 `.git/hooks/pre-commit` 同样是本机生成物，不要入库。
+
+它落在仓库根上，不一定和 `adone.toml` 同层：多模块工作区里 `adone.toml` 常在子目录，
+钩子仍写进上层仓库的 `.git/hooks/`（配了 `core.hooksPath` 就写到那边），
+脚本会自己 `cd` 回 `adone.toml` 那一层。装完看一眼 `adone install` 打印的路径。
 
 | 系统 | 登记的 command | 本机还要有 |
 | --- | --- | --- |
@@ -598,6 +602,16 @@ A：那是 1.3.14 之前的设计：把每一轮 `stop` 当成「宣称完成」
 A：当初是带 `@v1.3.x` 这样的 tag 装的，pipx 把这串地址记成了升级源，等于钉死在那一版。
 改用 `adone upgrade`；或者不带 tag 重装一次：
 `pipx install --force git+https://github.com/iamharvey/ActuallyDone.git`。
+
+<br/>
+
+**Q：`git commit` 没触发全量门禁？**  
+A：两条路各管一半，缺哪条都是安静地不设防，先 `adone doctor` 看它报哪条。
+Agent 跑的 `git commit` 靠 `beforeShellExecution` 的 commit-guard——`hook.log` 里
+一条 `commit-guard launched` 都没有，就是登记里没有它（v1.3.14 之前装的），
+重跑 `adone install --hooks-only --force`。你自己在终端敲的 `git commit`
+Cursor 完全看不见，只有 `.git/hooks/pre-commit` 拦得住；v1.3.19 之前，
+`adone.toml` 不在仓库根上时它压根装不上。
 
 <br/>
 

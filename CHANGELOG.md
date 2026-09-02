@@ -2,6 +2,27 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.3.19 — 2026-09-02
+
+提交时的全量门禁在多模块工作区里从来没生效过，而它失效的样子和「装好了」一模一样。
+
+- **`adone.toml` 不在仓库根上时 pre-commit 装不上**：以前硬拼 `项目目录/.git`，
+  只要仓库根在上层就当成「不是 git 仓库」跳过，手工 `git commit` 一路畅通。
+  改成用 `git rev-parse` 定位，顺带认了两种以前也会被跳过的情形：
+  `.git` 是文件（submodule / worktree，钩子在主仓库的 common dir 里）、
+  仓库配了 `core.hooksPath` 把钩子目录挪走（写进 `.git/hooks` 的东西 git 根本不看）。
+- **pre-commit 进错目录**：脚本原来 `cd` 到仓库根就跑 `adone gate check`。
+  项目在子目录时 adone 往上找不到 `adone.toml`，反而把「没配置」当成「不许提交」。
+  现在 `cd` 到 `adone.toml` 那一层。找解释器也补上了 `python` 与 `py -3`。
+- **`adone doctor` 补上两个盲区**：`.git/hooks/pre-commit` 不在时点名
+  （Cursor 钩子只看得见 Agent 跑的 shell，你自己在终端敲的 `git commit` 只有它拦得住）；
+  `hooks.json` 里没有 `commit-guard` 登记时点名（v1.3.14 之前装的登记没有
+  `beforeShellExecution`，Agent 提交时没人拦，`hook.log` 里连一行都不会出现）。
+- 跳过 pre-commit 时把原因和后果一起打出来，不再只是一句「不是 git 仓库」。
+
+从 v1.3.13 及更早升上来的项目，必须 `adone install --hooks-only --force` 才会补上
+提交门禁；装完 `adone doctor` 应当同时报出 `commit-guard` 与 `git pre-commit` 两行。
+
 ## v1.3.18 — 2026-09-01
 
 - **新增 `project.source_encoding`**：`adone init` / `detect` 采样受监视树自动判断

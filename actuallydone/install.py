@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -327,11 +328,26 @@ def hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
                         "装好 adone 后重跑 adone install --hooks-only --force")
     if "commit-guard" in registered:
         lines.append("  提交：beforeShellExecution 命中 git commit 时先 gate check")
-    pre = cfg.root / ".git" / "hooks" / "pre-commit"
-    if pre.is_file() and PRE_COMMIT_MARK in pre.read_text(encoding="utf-8", errors="replace"):
-        lines.append("  git pre-commit：已装（回执不新鲜时跑全量 gate run）")
-    elif (cfg.root / ".git").exists():
-        lines.append("  git pre-commit：未安装（adone install --with-hooks 写入本机）")
+    else:
+        problems.append("hooks.json 里没有 commit-guard（beforeShellExecution）："
+                        "Agent 跑 git commit 时没人拦，全量门禁不会触发。"
+                        "这是 v1.3.14 之前装的登记，重跑 "
+                        "adone install --hooks-only --force")
+
+    # 两条路各管一半：Cursor 钩子只看得见 Agent 跑的 shell，你自己在终端敲的
+    # git commit 只有 .git/hooks/pre-commit 拦得住。缺哪条都是「安静地不设防」。
+    pre, why, _ = git_pre_commit_path(cfg.root)
+    if pre is None:
+        lines.append(f"  git pre-commit：跳过（{why}）")
+    elif pre.is_file() and PRE_COMMIT_MARK in pre.read_text(encoding="utf-8",
+                                                            errors="replace"):
+        lines.append(f"  git pre-commit：已装于 {pre}（回执不新鲜时跑全量 gate run）")
+    elif pre.is_file():
+        problems.append(f"{pre} 是别人写的，不含 adone 那段：手工 git commit 不会跑全量门禁。"
+                        f"要接管加 adone install --hooks-only --force")
+    else:
+        problems.append(f"{pre} 不存在：Agent 之外的 git commit（你自己在终端敲的）"
+                        f"不会跑全量门禁。跑 adone install --hooks-only --force 写入本机")
     return lines, problems
 
 
@@ -684,12 +700,18 @@ PRE_COMMIT_SH = """#!/bin/sh
 # actuallydone pre-commit — 本机生成，不要入库。
 # 全量回执已新鲜则放行；否则跑 adone gate run。
 root=$(git rev-parse --show-toplevel) || exit 1
-cd "$root" || exit 1
+# 进的是 adone.toml 那一层，不是仓库根：多模块工作区里两者常常不是同一个目录，
+# 站在仓库根上 adone 往上找不到配置，会把「没配置」当成「不许提交」。
+cd "$root/__PROJECT_REL__" || exit 1
 run() {
   if command -v adone >/dev/null 2>&1; then
     adone "$@"
   elif command -v python3 >/dev/null 2>&1; then
     python3 -m actuallydone "$@"
+  elif command -v python >/dev/null 2>&1; then
+    python -m actuallydone "$@"
+  elif command -v py >/dev/null 2>&1; then
+    py -3 -m actuallydone "$@"
   else
     echo "pre-commit: 找不到 adone，拒绝提交。先装 adone 或把 python3 放进 PATH。" >&2
     exit 1
@@ -703,25 +725,80 @@ run gate run
 """
 
 
+def _git_line(cwd: Path, *args: str) -> str | None:
+    """git 的单行输出；跑不起来或非零退出都返回 None。"""
+    try:
+        proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True,
+                              encoding="utf-8", errors="replace", timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    for line in (proc.stdout or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return None
+
+
+def git_pre_commit_path(root: Path) -> tuple[Path | None, str, str]:
+    """本机该写 pre-commit 的位置，外加（说不清时的原因，相对仓库根的项目路径）。
+
+    以前这里是 `root/.git/hooks/pre-commit` 硬拼。三种常见情形都会被它当成
+    「不是 git 仓库」静默跳过，于是手工 `git commit` 从来没被拦过：
+    adone.toml 在仓库子目录里（多模块工作区）、`.git` 是文件（submodule /
+    worktree）、仓库配了 core.hooksPath 把钩子挪走。
+    """
+    if shutil.which("git") is None:
+        return None, "PATH 里没有 git", "."
+    top = _git_line(root, "rev-parse", "--show-toplevel")
+    if top is None:
+        return None, "这里不在任何 git 仓库里", "."
+    try:
+        rel = Path(root).resolve().relative_to(Path(top).resolve()).as_posix() or "."
+    except ValueError:
+        rel = "."
+
+    # core.hooksPath 一旦设了，写进 .git/hooks 的东西 git 根本不看
+    configured = _git_line(root, "config", "--get", "core.hooksPath")
+    if configured:
+        base = Path(configured)
+        base = base if base.is_absolute() else Path(top) / base
+    else:
+        # worktree 的钩子在主仓库的 common dir 里，不在每个 worktree 各自的 .git 里
+        common = _git_line(root, "rev-parse", "--git-common-dir") or ".git"
+        base = Path(common)
+        base = (base if base.is_absolute() else Path(root) / base) / "hooks"
+    # common dir 常常回 ../../.git 这种相对路径，原样打出来没法读
+    return _tidy(base / "pre-commit"), "", rel
+
+
+def _tidy(p: Path) -> Path:
+    """去掉 ../ 但不跟符号链接：解析过头会把路径显示成用户不认识的样子。"""
+    try:
+        return Path(os.path.normpath(p.absolute()))
+    except OSError:
+        return p
+
+
 def _install_git_pre_commit(cfg: Config, args) -> int:
-    git_dir = cfg.root / ".git"
-    if not git_dir.is_dir():
-        print("  跳过 git pre-commit（这里不是 git 仓库）")
+    dest, why, rel = git_pre_commit_path(cfg.root)
+    if dest is None:
+        print(f"  跳过 git pre-commit（{why}）：手工 git commit 不会被拦住")
         return 0
-    dest = git_dir / "hooks" / "pre-commit"
-    existing = dest.read_text(encoding="utf-8") if dest.is_file() else ""
+    existing = dest.read_text(encoding="utf-8", errors="replace") if dest.is_file() else ""
     ours = PRE_COMMIT_MARK in existing
     if dest.is_file() and not ours and not args.force:
-        print(f"  跳过已存在的 .git/hooks/pre-commit（不是 adone 写的；要覆盖加 --force）")
+        print(f"  跳过已存在的 {dest}（不是 adone 写的；要覆盖加 --force）")
         return 0
+    where = f"{dest}" + (f"（项目在仓库的 {rel}/ 下）" if rel != "." else "")
     if args.dry_run:
-        print("  [演练] 将写入 .git/hooks/pre-commit（本机，不入库）")
+        print(f"  [演练] 将写入 {where}（本机，不入库）")
         return 1
     dest.parent.mkdir(parents=True, exist_ok=True)
-    _write_lf(dest, PRE_COMMIT_SH)
+    _write_lf(dest, PRE_COMMIT_SH.replace("__PROJECT_REL__", rel))
     try:
         dest.chmod(dest.stat().st_mode | 0o111)
     except OSError:
         pass
-    print("  写入 .git/hooks/pre-commit（本机，不入库：回执不新鲜时跑全量 gate run）")
+    print(f"  写入 {where}（本机，不入库：回执不新鲜时跑全量 gate run）")
     return 1

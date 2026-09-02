@@ -11,6 +11,7 @@ from actuallydone.adapters.base import Adapter
 from actuallydone.changed import (changed_paths, file_hashes, git_changed,
                                    git_diff_names, run_changed,
                                    same_as_last_ok_partial)
+from actuallydone.config import Config
 from actuallydone.install import PRE_COMMIT_MARK, cmd_install
 from tests.helpers import ProjectCase
 from tests.test_hooks import _args
@@ -215,6 +216,21 @@ class TestRelatedRun(ProjectCase):
 
 
 class TestPreCommitInstall(ProjectCase):
+    def _cfg_under(self, sub: str) -> Config:
+        """在仓库的子目录里造一个项目，返回指向那一层的 Config。"""
+        d = self.root / sub
+        (d / "internal").mkdir(parents=True, exist_ok=True)
+        (d / "go.mod").write_text("module fixture\n\ngo 1.22\n", encoding="utf-8")
+        (d / "internal" / "calc.go").write_text(
+            "package internal\n\nfunc Add(a, b int) int { return a + b }\n",
+            encoding="utf-8")
+        return Config.from_dict(d, {
+            "project": {"name": "fixture", "ecosystems": ["go"]},
+            "gate": {"watch_roots": ["internal"], "watch_exts": [".go"],
+                     "min_tree_files": 1, "step": []},
+            "tests": {"adapter": "go", "roots": ["internal"]},
+        })
+
     def test_with_hooks写入本机pre_commit(self):
         self.make_go_project()
         subprocess.run(["git", "init"], cwd=self.root, check=True,
@@ -229,10 +245,51 @@ class TestPreCommitInstall(ProjectCase):
         self.assertIn("gate check", text)
         self.assertNotIn("\r", text)
 
-    def test_不是git仓库就跳过(self):
+    def test_项目在仓库子目录里也要装上(self):
+        """多模块工作区：adone.toml 不在仓库根上。
+
+        以前这里硬拼 root/.git，仓库根在上层就当成「不是 git 仓库」跳过，
+        于是手工 git commit 从来没被拦过——而它和「装好了」一样安静。
+        """
+        subprocess.run(["git", "init"], cwd=self.root, check=True,
+                       capture_output=True)
+        cfg = self._cfg_under("svc/api")
+        with redirect_stdout(StringIO()):
+            cmd_install(cfg, _args(hooks_only=True))
+        hook = self.root / ".git" / "hooks" / "pre-commit"
+        self.assertTrue(hook.is_file(), "仓库根在上层时没装 pre-commit")
+        self.assertIn(PRE_COMMIT_MARK, hook.read_text(encoding="utf-8"))
+
+    def test_钩子进的是adone_toml那一层(self):
+        """站在仓库根上跑 adone，往上找不到子目录里的 adone.toml。"""
+        subprocess.run(["git", "init"], cwd=self.root, check=True,
+                       capture_output=True)
+        cfg = self._cfg_under("svc/api")
+        with redirect_stdout(StringIO()):
+            cmd_install(cfg, _args(hooks_only=True))
+        text = (self.root / ".git" / "hooks" / "pre-commit").read_text(encoding="utf-8")
+        self.assertIn('cd "$root/svc/api"', text)
+
+    def test_配了core_hooksPath就写到那边去(self):
+        """core.hooksPath 一设，写进 .git/hooks 的东西 git 根本不看。"""
+        self.make_go_project()
+        subprocess.run(["git", "init"], cwd=self.root, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "config", "core.hooksPath", ".githooks"],
+                       cwd=self.root, check=True, capture_output=True)
+        with redirect_stdout(StringIO()):
+            cmd_install(self.config(), _args(hooks_only=True))
+        moved = self.root / ".githooks" / "pre-commit"
+        self.assertTrue(moved.is_file(), "配了 core.hooksPath 却写进 .git/hooks，等于没装")
+        self.assertIn(PRE_COMMIT_MARK, moved.read_text(encoding="utf-8"))
+        self.assertFalse((self.root / ".git" / "hooks" / "pre-commit").exists())
+
+    def test_不是git仓库就说明原因(self):
         self.make_go_project()
         out = StringIO()
         with redirect_stdout(out):
             cmd_install(self.config(), _args(hooks_only=True))
-        self.assertIn("不是 git 仓库", out.getvalue())
+        said = out.getvalue()
+        self.assertIn("不在任何 git 仓库里", said)
+        self.assertIn("手工 git commit 不会被拦住", said)
         self.assertFalse((self.root / ".git" / "hooks" / "pre-commit").exists())

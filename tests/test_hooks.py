@@ -361,6 +361,30 @@ class TestDoctorChecksHooks(ProjectCase):
         _, problems = install.hooks_report(cfg)
         self.assertTrue(any("绝不存在的解释器" in p for p in problems), problems)
 
+    def test_没有git_pre_commit时点名(self):
+        """Cursor 钩子只看得见 Agent 跑的 shell。你自己在终端敲的 git commit
+        只有 .git/hooks/pre-commit 拦得住，它不在就是「安静地不设防」。"""
+        self.make_go_project()
+        subprocess.run(["git", "init"], cwd=self.root, check=True,
+                       capture_output=True)
+        cfg = self.install_hooks()
+        (self.root / ".git" / "hooks" / "pre-commit").unlink()
+        _, problems = install.hooks_report(cfg)
+        self.assertTrue(any("pre-commit" in p and "全量门禁" in p for p in problems),
+                        problems)
+
+    def test_hooks_json里没有commit_guard时点名(self):
+        """v1.3.14 之前装的登记没有 beforeShellExecution：Agent 提交时没人拦，
+        而 hook.log 里连一行都不会出现，看上去和「一切正常」一样。"""
+        self.make_go_project()
+        cfg = self.install_hooks()
+        hooks_json = self.root / ".cursor" / "hooks.json"
+        data = json.loads(hooks_json.read_text(encoding="utf-8"))
+        data["hooks"].pop("beforeShellExecution", None)
+        hooks_json.write_text(json.dumps(data), encoding="utf-8")
+        _, problems = install.hooks_report(cfg)
+        self.assertTrue(any("commit-guard" in p for p in problems), problems)
+
     def test_残留的py会被点名(self):
         """Windows 上这个文件就是每次弹出来的那个。重渲必须删掉它。"""
         self.make_go_project()
