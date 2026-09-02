@@ -265,6 +265,10 @@ def main(argv: list[str] | None = None) -> int:
         argv = ["hook", stem, *argv]
     ap = build_parser()
     args = ap.parse_args(argv)
+    from .upgrade import maybe_offer_upgrade
+    offered = maybe_offer_upgrade(args)
+    if offered is not None:
+        return offered
     try:
         return args.func(args)
     except ConfigError as e:

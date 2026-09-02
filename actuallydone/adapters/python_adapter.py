@@ -10,9 +10,11 @@ from ..model import FuncBody, TestResult
 from .base import (CAP_COVERAGE, CAP_FUNCS, CAP_SINGLE_TEST, CAP_TESTS, Adapter,
                    read)
 
-# pytest: "5 passed, 1 skipped, 2 failed in 0.3s"
-PYTEST_SUM_RE = re.compile(
-    r"(?:(\d+) failed)?[,\s]*(?:(\d+) passed)?[,\s]*(?:(\d+) skipped)?[^\n]*in [\d.]+s")
+# pytest 汇总行字段顺序不固定：默认 -q 是 "5 passed, 1 failed in 0.3s"
+PYTEST_SUM_LINE_RE = re.compile(r"in [\d.]+s")
+PYTEST_N_FAILED = re.compile(r"(\d+) failed")
+PYTEST_N_PASSED = re.compile(r"(\d+) passed")
+PYTEST_N_SKIPPED = re.compile(r"(\d+) skipped")
 PYTEST_LINE_RE = re.compile(r"^(\S+::\S+)\s+(PASSED|FAILED|SKIPPED)", re.M)
 # unittest -v: "test_foo (mod.Case) ... ok / FAIL / skipped 'why'"
 UNITTEST_RE = re.compile(r"^(\w+) \([^)]+\)[^\n]*\.\.\. (ok|FAIL|ERROR|skipped)", re.M)
@@ -20,6 +22,27 @@ DEF_TEST_RE = re.compile(r"^\s*def (test\w*)\(", re.M)
 DEF_RE = re.compile(r"^(\s*)def \w+\(")
 ASSERT_WORDS = ("assert ", "assertEqual", "assertTrue", "assertRaises", "assertIn",
                 "assertIs", "assertNot", "self.fail", "pytest.raises")
+
+
+def _pytest_summary(text: str) -> TestResult | None:
+    """从含 `in 0.3s` 的那一行分别捞 failed / passed / skipped，不依赖字段顺序。"""
+    line = ""
+    for ln in text.splitlines():
+        if PYTEST_SUM_LINE_RE.search(ln) and any(
+                w in ln for w in ("passed", "failed", "skipped")):
+            line = ln
+            break
+    if not line:
+        return None
+
+    def n(pat: re.Pattern) -> int:
+        m = pat.search(line)
+        return int(m.group(1)) if m else 0
+
+    failed, passed, skipped = n(PYTEST_N_FAILED), n(PYTEST_N_PASSED), n(PYTEST_N_SKIPPED)
+    if failed + passed + skipped == 0:
+        return None
+    return TestResult(failed=failed, passed=passed, skipped=skipped, skip_top=skipped)
 
 
 class PythonAdapter(Adapter):
@@ -58,11 +81,9 @@ class PythonAdapter(Adapter):
             return TestResult(passed=len(p), failed=len(f), skipped=len(s),
                               skip_top=len(s), passed_names=p, failed_names=f,
                               skipped_names=s)
-        m = PYTEST_SUM_RE.search(text)
-        if m and any(m.groups()):
-            return TestResult(failed=int(m.group(1) or 0), passed=int(m.group(2) or 0),
-                              skipped=int(m.group(3) or 0),
-                              skip_top=int(m.group(3) or 0))
+        summed = _pytest_summary(text)
+        if summed is not None:
+            return summed
         return TestResult(parsed=False)
 
     def test_files(self, roots: list[Path]) -> list[Path]:

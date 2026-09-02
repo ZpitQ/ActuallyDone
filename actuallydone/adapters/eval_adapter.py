@@ -15,7 +15,8 @@ from ..model import FuncBody, TestResult
 from .base import CAP_SINGLE_TEST, CAP_TESTS, Adapter, read
 
 # PASS recall#退货时效
-RESULT_LINE_RE = re.compile(r"^(PASS|FAIL|SKIP)\s+(\S+)\s*$", re.M)
+# 只取前两列：FAIL 后面常跟原因（官方 demo 就是这样），行尾锚会把整行丢掉
+RESULT_LINE_RE = re.compile(r"^(PASS|FAIL|SKIP)\s+(\S+)", re.M)
 EXPECT_KEYS = ("must", "must_not", "expect", "expect_interrupt")
 
 

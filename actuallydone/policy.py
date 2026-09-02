@@ -48,6 +48,30 @@ def _contracts(cfg: Config) -> dict:
     return out
 
 
+def _build_files(cfg: Config) -> dict[str, str]:
+    """已配置生态的构建/清单文件指纹。改这些能让测试静默少跑，树哈希却看不见。"""
+    from .adapters import REGISTRY
+    from .config import PRUNE_DIRS
+    out: dict[str, str] = {}
+    for name in cfg.get("project.ecosystems") or []:
+        cls = REGISTRY.get(str(name).strip().lower())
+        if cls is None or not getattr(cls, "markers", ()):
+            continue
+        for pat in cls.markers:
+            for found in sorted(cfg.root.glob(pat)):
+                if not found.is_file():
+                    continue
+                try:
+                    rel = found.relative_to(cfg.root)
+                except ValueError:
+                    continue
+                if any(part in PRUNE_DIRS for part in rel.parts):
+                    continue
+                key = rel.as_posix()
+                out[key] = hashlib.sha256(found.read_bytes()).hexdigest()[:16]
+    return out
+
+
 def snapshot(cfg: Config) -> dict:
     steps = []
     for s in cfg.get("gate.step", []) or []:
@@ -73,6 +97,7 @@ def snapshot(cfg: Config) -> dict:
         "baseline_exempt": sorted(cfg.get("tests.baseline_exempt") or []),
         "checks": {k: len(cfg.get(k) or []) for k in CHECK_KEYS},
         "contracts": _contracts(cfg),
+        "build_files": _build_files(cfg),
     }
 
 
@@ -125,6 +150,10 @@ def diff(base: dict, cur: dict) -> tuple[list[str], list[str]]:
 
     loose.extend(_diff_steps(base.get("steps") or [], cur.get("steps") or []))
     loose.extend(_diff_contracts(base.get("contracts") or {}, cur.get("contracts") or {}))
+    # 老基线没有这个字段就不比：强行比等于逼所有人立刻重记账
+    if "build_files" in base:
+        loose.extend(_diff_build_files(base.get("build_files") or {},
+                                       cur.get("build_files") or {}))
 
     for k in CHECK_KEYS:
         b, c = (base.get("checks") or {}).get(k, 0), (cur.get("checks") or {}).get(k, 0)
@@ -150,12 +179,29 @@ def _diff_steps(base: list[dict], cur: list[dict]) -> list[str]:
         if now.get("kind") != s.get("kind"):
             loose.append(f"门禁步骤「{s['name']}」的 kind 从「{s.get('kind') or '空'}」"
                          f"改成「{now.get('kind') or '空'}」：判定方式变了")
+        if now.get("cwd", ".") != s.get("cwd", "."):
+            loose.append(f"门禁步骤「{s['name']}」的工作目录从「{s.get('cwd') or '.'}」改成"
+                         f"「{now.get('cwd') or '.'}」：跑的可能已经不是同一份代码了")
+        if now.get("adapter") != s.get("adapter"):
+            loose.append(f"门禁步骤「{s['name']}」的适配器从「{s.get('adapter') or '空'}」"
+                         f"改成「{now.get('adapter') or '空'}」：判定口径变了")
         gone = sorted(set(s.get("invalid_marks") or []) - set(now.get("invalid_marks") or []))
         if gone:
             loose.append(f"门禁步骤「{s['name']}」不再把 {'、'.join(gone)} 判为证据无效")
         if s.get("script") and now.get("script") != s.get("script"):
             loose.append(f"门禁步骤「{s['name']}」跑的是仓库内脚本，而脚本内容变了"
                          f"（{s['script']} → {now.get('script')}）")
+    return loose
+
+
+def _diff_build_files(base: dict, cur: dict) -> list[str]:
+    loose: list[str] = []
+    for rel, sha in sorted(base.items()):
+        now = cur.get(rel)
+        if now is None:
+            loose.append(f"构建文件 {rel} 不见了：它能改变测试跑什么")
+        elif now != sha:
+            loose.append(f"构建文件 {rel} 的内容变了：它能改变测试跑什么")
     return loose
 
 

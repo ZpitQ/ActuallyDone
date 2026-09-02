@@ -1,6 +1,6 @@
 # ActuallyDone - adone
 
-当前版本 **v1.3.19**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.3.20**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
@@ -83,6 +83,10 @@ source ~/.zshrc
 Windows 用 `pipx ensurepath`，然后重开终端。
 
 `adone --version` 能打印版本号，再往下走。
+
+交互式终端里敲 `adone doctor` / `gate` / `install` 这类命令时，如果 GitHub 上有新版本，
+会先问一句要不要升。回车或 `n` 继续手头的事；`y` 走和 `adone upgrade` 同一条路径。
+钩子、`--json`、管道、CI 里不问。不想被问设 `ADONE_NO_UPDATE_CHECK=1`。
 
 ### 升级：用 `adone upgrade`，不要用 `pipx upgrade`
 
@@ -595,6 +599,12 @@ A：新接入一门生态用 `adone detect --merge`。不要用 `--write` 覆盖
 **Q：问一句设计、没改代码，也被推去跑全量测试？**  
 A：那是 1.3.14 之前的设计：把每一轮 `stop` 当成「宣称完成」。现在的配置和用法见第 5 节。
 升完要 `adone install --hooks-only --force`，否则项目里还是旧钩子。
+
+<br/>
+
+**Q：每次敲 adone 都问要不要升级，怎么关掉？**  
+A：设 `ADONE_NO_UPDATE_CHECK=1`。钩子、`--json`、管道和 CI 本来就不会问。
+也可以直接 `adone upgrade`，不必等提示。
 
 <br/>
 

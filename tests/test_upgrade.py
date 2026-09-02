@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import os
+from argparse import Namespace
+from io import StringIO
 from pathlib import Path
+from contextlib import redirect_stdout
 
 from actuallydone import __version__
 from actuallydone.cli import build_parser
 from actuallydone.upgrade import (classify_entry, git_blockers, install_argv,
-                                  install_mode, parse_version, repo_root)
+                                  install_mode, maybe_offer_upgrade,
+                                  parse_version, read_cache, repo_root,
+                                  skip_nudge, write_cache)
 from tests.helpers import ProjectCase
 
 
@@ -97,6 +103,94 @@ class TestInstallMode(ProjectCase):
         (self.root / ".git").mkdir()
         entry.write_bytes(b"MZ")
         self.assertEqual(classify_entry(entry), "git")
+
+
+class TestNudge(ProjectCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.cache = self.root / "update-check.json"
+        self.old_cache = os.environ.get("ADONE_UPDATE_CACHE")
+        self.old_off = os.environ.get("ADONE_NO_UPDATE_CHECK")
+        os.environ["ADONE_UPDATE_CACHE"] = str(self.cache)
+        os.environ.pop("ADONE_NO_UPDATE_CHECK", None)
+        self.addCleanup(self._restore_env)
+
+    def _restore_env(self) -> None:
+        if self.old_cache is None:
+            os.environ.pop("ADONE_UPDATE_CACHE", None)
+        else:
+            os.environ["ADONE_UPDATE_CACHE"] = self.old_cache
+        if self.old_off is None:
+            os.environ.pop("ADONE_NO_UPDATE_CHECK", None)
+        else:
+            os.environ["ADONE_NO_UPDATE_CHECK"] = self.old_off
+
+    def _args(self, **over) -> Namespace:
+        base = dict(cmd="doctor", json=False)
+        base.update(over)
+        return Namespace(**base)
+
+    def test_钩子和json和显式关掉都不问(self):
+        os.environ["ADONE_NO_UPDATE_CHECK"] = "1"
+        self.assertTrue(skip_nudge(self._args()))
+        os.environ.pop("ADONE_NO_UPDATE_CHECK")
+        self.assertTrue(skip_nudge(self._args(cmd="hook")))
+        self.assertTrue(skip_nudge(self._args(cmd="upgrade")))
+        self.assertTrue(skip_nudge(self._args(json=True)))
+        called = []
+        rc = maybe_offer_upgrade(self._args(cmd="hook"),
+                                 peek=lambda: called.append("peek") or ("v9", "9.9.9"),
+                                 ask=lambda *_: called.append("ask") or True)
+        self.assertIsNone(rc)
+        self.assertEqual(called, [])
+
+    def test_缓存里已是最新就不再联网(self):
+        write_cache({"checked_at": 1e18, "remote_ver": __version__,
+                     "remote_ref": "v" + __version__})
+        called = []
+        rc = maybe_offer_upgrade(self._args(), peek=lambda: called.append("peek") or (None, None),
+                                 ask=lambda *_: called.append("ask") or True, force=True)
+        self.assertIsNone(rc)
+        self.assertEqual(called, [])
+
+    def test_有新版用户拒绝就继续原命令(self):
+        write_cache({"checked_at": 1, "remote_ver": "9.9.9", "remote_ref": "v9.9.9"})
+        asked = []
+        rc = maybe_offer_upgrade(
+            self._args(), peek=lambda: (_ for _ in ()).throw(AssertionError("不该联网")),
+            ask=lambda loc, rem: asked.append((loc, rem)) or False,
+            now=2, force=True)
+        self.assertIsNone(rc)
+        self.assertEqual(asked, [(__version__, "9.9.9")])
+
+    def test_有新版用户同意才升级并中止原命令(self):
+        write_cache({"checked_at": 1, "remote_ver": "9.9.9", "remote_ref": "v9.9.9"})
+        with redirect_stdout(StringIO()):
+            rc = maybe_offer_upgrade(
+                self._args(),
+                peek=lambda: (_ for _ in ()).throw(AssertionError("不该联网")),
+                ask=lambda *_: True,
+                upgrade=lambda: 0,
+                now=2, force=True)
+        self.assertEqual(rc, 0)
+
+    def test_缓存过期才去探远端(self):
+        write_cache({"checked_at": 1, "remote_ver": __version__, "remote_ref": "v1"})
+        peeked = []
+        rc = maybe_offer_upgrade(
+            self._args(),
+            peek=lambda: peeked.append(1) or ("v9.9.9", "9.9.9"),
+            ask=lambda *_: False,
+            now=1 + 13 * 3600, force=True)
+        self.assertIsNone(rc)
+        self.assertEqual(peeked, [1])
+        self.assertEqual(read_cache().get("remote_ver"), "9.9.9")
+
+    def test_探不到就静默放过(self):
+        rc = maybe_offer_upgrade(self._args(), peek=lambda: (None, None),
+                                 ask=lambda *_: True, now=1, force=True)
+        self.assertIsNone(rc)
+        self.assertFalse(self.cache.exists())
 
 
 class TestGitBlockers(ProjectCase):

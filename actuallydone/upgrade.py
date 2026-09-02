@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -128,6 +129,141 @@ def discover_remote() -> tuple[str | None, str | None, str | None]:
         return None, None, last_err or "查不到远端版本"
     _, ref, ver = max(found, key=lambda x: x[0])
     return ref, ver, None
+
+
+# --------------------------------------------------------------------------- 启动时提示
+
+# 联网最多半天一次：每次 adone 都打 GitHub 会撞限流，钩子更经不起。
+# 已经知道有新版时，交互式命令每次都会问；拒了也不记「今天别烦我」——
+# 用户说了让他自己选，下一次敲命令还是他的选择。
+_CHECK_TTL = 12 * 3600
+_PEEK_TIMEOUT = 3
+
+
+def cache_path() -> Path:
+    override = os.environ.get("ADONE_UPDATE_CACHE")
+    if override:
+        return Path(override)
+    if os.name == "nt":
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    else:
+        base = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return base / "actuallydone" / "update-check.json"
+
+
+def read_cache(path: Path | None = None) -> dict:
+    p = path or cache_path()
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_cache(data: dict, path: Path | None = None) -> None:
+    p = path or cache_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def peek_latest(timeout: float = _PEEK_TIMEOUT) -> tuple[str | None, str | None]:
+    """启动提示用的短超时探测：Release，没有就看 tag 列表第一页。失败返回 (None, None)。"""
+    found: list[tuple[tuple[int, ...], str, str]] = []
+    req = urllib.request.Request(f"{API}/releases/latest", headers=_headers())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+        tag = str((data or {}).get("tag_name") or "")
+        if tag:
+            found.append((parse_version(tag), tag, tag))
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError,
+            json.JSONDecodeError, OSError):
+        pass
+    if not found:
+        req = urllib.request.Request(f"{API}/tags", headers=_headers())
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode())
+            if isinstance(data, list):
+                names = [str(t.get("name") or "") for t in data if t.get("name")]
+                names = [n for n in names if parse_version(n) != (0, 0, 0) or n.strip("vV")]
+                if names:
+                    best = max(names, key=parse_version)
+                    found.append((parse_version(best), best, best))
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError,
+                json.JSONDecodeError, OSError):
+            return None, None
+    if not found:
+        return None, None
+    _, ref, ver = max(found, key=lambda x: x[0])
+    return ref, ver
+
+
+def skip_nudge(args) -> bool:
+    """钩子、机器读的输出、没有人坐在前面：问一句都是在添乱。"""
+    if os.environ.get("ADONE_NO_UPDATE_CHECK"):
+        return True
+    if os.environ.get("CI"):
+        return True
+    if getattr(args, "cmd", None) in ("hook", "upgrade"):
+        return True
+    if getattr(args, "json", False):
+        return True
+    try:
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            return True
+    except OSError:
+        return True
+    return False
+
+
+def _ask_upgrade(local: str, remote: str) -> bool:
+    print(f"有新版本 {remote}（当前 {local}）。现在升级？[y/N] ", end="", flush=True)
+    try:
+        ans = input().strip().lower()
+    except EOFError:
+        print()
+        return False
+    return ans in ("y", "yes", "是")
+
+
+def maybe_offer_upgrade(args, *, peek=None, ask=None, upgrade=None,
+                        now: float | None = None, force: bool = False) -> int | None:
+    """交互式命令在干活之前问一句。返回 None 表示继续原命令；整数是升级后的退出码。
+
+    升完不能接着跑原命令：包文件已经被覆盖，内存里还是旧代码。
+    force 只给测试用：非 TTY 的用例也要把后面的分支跑到。
+    """
+    if not force and skip_nudge(args):
+        return None
+    local = __version__
+    cache = read_cache()
+    stamp = float(now if now is not None else time.time())
+    remote_ver = str(cache.get("remote_ver") or "")
+    checked = float(cache.get("checked_at") or 0)
+    stale = stamp - checked > _CHECK_TTL or not remote_ver
+    if stale:
+        ref, ver = (peek or peek_latest)()
+        if not ver:
+            return None
+        write_cache({"checked_at": stamp, "remote_ref": ref, "remote_ver": ver})
+        remote_ver = ver
+    if parse_version(remote_ver) <= parse_version(local):
+        return None
+    if not (ask or _ask_upgrade)(local, remote_ver):
+        return None
+    print("开始升级。")
+    if upgrade is None:
+        from argparse import Namespace
+        code = cmd_upgrade(Namespace(check=False, ref=None, force=False, dry_run=False))
+    else:
+        code = upgrade()
+    if code == 0:
+        print("请重新运行刚才那条命令：升完的是磁盘上的包，当前进程还是旧代码。")
+    return code
 
 
 # --------------------------------------------------------------------------- 安装方式
