@@ -1,4 +1,4 @@
-# ActuallyDone
+# ActuallyDone - adone
 
 当前版本 **v1.3.19**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
