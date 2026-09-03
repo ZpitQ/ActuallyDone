@@ -1,6 +1,9 @@
 :<<"::::"
 @echo off
 setlocal EnableExtensions
+REM 中文 Windows 默认 GBK。门禁 print Maven 输出时会 UnicodeEncodeError。
+set PYTHONIOENCODING=utf-8
+set PYTHONUTF8=1
 REM cmd.exe branch. Cursor on Windows may instead run this file with Git Bash;
 REM that path is the shell block after the closing delimiter.
 set "NAME=%~n0"
@@ -27,6 +30,8 @@ if /i not "%ADONE:~-4%"==".cmd" "%ADONE%" hook %NAME%
 exit /b %ERRORLEVEL%
 ::::
 # Git Bash / sh branch. 1.3.6's pure-cmd file died on `@echo off` and never wrote hook.log.
+export PYTHONIOENCODING=utf-8
+export PYTHONUTF8=1
 NAME=$(basename "$0" .cmd)
 ROOT="${CURSOR_PROJECT_DIR:-$PWD}"
 mkdir -p "$ROOT/.adone" 2>/dev/null || true

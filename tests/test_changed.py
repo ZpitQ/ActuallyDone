@@ -243,6 +243,7 @@ class TestPreCommitInstall(ProjectCase):
         self.assertIn(PRE_COMMIT_MARK, text)
         self.assertIn("gate run", text)
         self.assertIn("gate check", text)
+        self.assertIn("PYTHONIOENCODING=utf-8", text)
         self.assertNotIn("\r", text)
 
     def test_项目在仓库子目录里也要装上(self):

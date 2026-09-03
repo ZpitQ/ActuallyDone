@@ -995,6 +995,10 @@ def _install_cursor_hooks(cfg: Config, v: dict[str, str], args) -> int:
 PRE_COMMIT_SH = """#!/bin/sh
 # actuallydone pre-commit — 本机生成，不要入库。
 # 全量回执已新鲜则放行；否则跑 adone gate run --for-commit。
+# 中文 Windows 上 git 拉起的 Python 默认 GBK，Maven 输出按 UTF-8 解完再 print
+# 会 UnicodeEncodeError。入口也会再改一次 stdout，这里先写上以免旧版 adone。
+export PYTHONIOENCODING=utf-8
+export PYTHONUTF8=1
 root=$(git rev-parse --show-toplevel) || exit 1
 # 进的是 adone.toml 那一层，不是仓库根：多模块工作区里两者常常不是同一个目录，
 # 站在仓库根上 adone 往上找不到配置，会把「没配置」当成「不许提交」。

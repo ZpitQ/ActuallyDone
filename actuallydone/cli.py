@@ -294,6 +294,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .textio import force_utf8_stdio
+    force_utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     # Windows 上 hooks.json 只能写一条 .exe 路径：CreateProcess 不能直接跑 .cmd。
     # 安装时把 adone.exe 复制成 .cursor/hooks/gate-guard.exe，这里按文件名分发。

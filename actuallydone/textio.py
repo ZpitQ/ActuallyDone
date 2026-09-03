@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 import locale
+import os
+import sys
 from pathlib import Path
 
 AUTO = "auto"
@@ -23,6 +25,27 @@ _ALIAS = {
 }
 
 _default = AUTO
+
+
+def force_utf8_stdio() -> None:
+    """把本进程的 stdout / stderr 改成 UTF-8。
+
+    中文 Windows 上 Python 默认按 cp936 写控制台。门禁按字节读 Maven 再按
+    UTF-8 解（现在的 mvn 常吐 UTF-8），print 那些字时会
+    `UnicodeEncodeError: 'gbk' codec can't encode`——pre-commit 里跑
+    `gate run` 就是这么炸的。用户在钩子里加 `PYTHONIOENCODING=utf-8`
+    是对的，但那只罩得住 git 钩子，而且下一次 `install --hooks-only`
+    会盖掉。入口自己改，所有路径（终端、钩子、pre-commit）都一样。
+    """
+    os.environ["PYTHONIOENCODING"] = "utf-8"
+    for stream in (sys.stdout, sys.stderr):
+        reconf = getattr(stream, "reconfigure", None)
+        if reconf is None:
+            continue
+        try:
+            reconf(encoding="utf-8", errors="replace")
+        except (OSError, ValueError, AttributeError):
+            pass
 
 
 def set_default(encoding: str | None) -> None:

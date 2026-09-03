@@ -6,6 +6,7 @@ GBK 的尾字节范围含 ASCII，`亄`（81 7B）按 UTF-8 解会漏出一个 `
 
 from __future__ import annotations
 
+import os
 from io import StringIO
 from contextlib import redirect_stdout
 
@@ -136,3 +137,28 @@ class TestDetectEncoding(ProjectCase):
             got = detect(self.root)
         self.assertEqual(got.source_encoding, "utf-8")
         self.assertIn('source_encoding = "utf-8"', render_config(got))
+
+
+class TestUtf8Stdio(ProjectCase):
+    """中文 Windows 上 stdout 默认 GBK。Maven 输出里有 GBK 没有的字时会炸。"""
+
+    def test_gbk控制台也能打印maven里那种字(self):
+        import io
+        import sys
+
+        old_enc = os.environ.get("PYTHONIOENCODING")
+        buf = io.BytesIO()
+        fake = io.TextIOWrapper(buf, encoding="gbk", errors="strict")
+        old = sys.stdout
+        sys.stdout = fake
+        try:
+            textio.force_utf8_stdio()
+            print("🎉 Maven BUILD SUCCESS 测试通过")
+            fake.flush()
+        finally:
+            sys.stdout = old
+            if old_enc is None:
+                os.environ.pop("PYTHONIOENCODING", None)
+            else:
+                os.environ["PYTHONIOENCODING"] = old_enc
+        self.assertIn("测试通过".encode("utf-8"), buf.getvalue())

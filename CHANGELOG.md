@@ -2,6 +2,16 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.4.2 — 2026-09-03
+
+中文 Windows 上 pre-commit 跑 `gate run` 会 `UnicodeEncodeError: 'gbk' codec can't encode`。
+Maven 按 UTF-8 吐日志，Python 却按 GBK 写控制台。用户在钩子里加
+`PYTHONIOENCODING=utf-8` 能救急，但 `install --hooks-only` 会盖掉。
+
+- 入口把 stdout / stderr 改成 UTF-8（`errors=replace`），终端、Cursor 钩子、
+  pre-commit 同一条路。
+- 新装的 `.git/hooks/pre-commit` 和 Windows 启动器带上 `PYTHONIOENCODING=utf-8`。
+
 ## v1.4.1 — 2026-09-03
 
 Qoder 那条路上四处会让门禁静默失效的地方。Cursor 的登记与出口仍然一个字不改。

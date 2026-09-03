@@ -1,6 +1,6 @@
 # ActuallyDone - adone
 
-当前版本 **v1.4.1**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.4.2**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
@@ -612,6 +612,14 @@ A：3.11+。钩子拿到的 PATH 常常和终端不一样，本机发生过被 c
 `~/.local/bin`、`~/.pyenv/shims`；Windows 去 `py.exe` 和
 `%LOCALAPPDATA%\Programs\Python`。
 装的时候 `pip` 报 `3.10.x not in '>=3.11'` 是同一回事，见第 3 节末尾。
+
+<br/>
+
+**Q：Windows 上 pre-commit / `gate run` 报 `gbk codec can't encode`？**  
+A：是工具的锅，不是你的仓库。中文 Windows 上 Python 默认按 GBK 写控制台，
+Maven 输出按 UTF-8 解完再 print 就会炸。v1.4.2 起入口会把 stdout 改成 UTF-8；
+重渲 `adone install --hooks-only --force` 后钩子里也会带 `PYTHONIOENCODING=utf-8`。
+不要手改 `.git/hooks/pre-commit`，下次重渲会盖掉。
 
 <br/>
 
