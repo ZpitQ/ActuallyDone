@@ -1,6 +1,6 @@
 # ActuallyDone - adone
 
-当前版本 **v1.3.21**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.4.0**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
@@ -38,7 +38,7 @@ ActuallyDone 提供一条命令 `adone`，让「完成」变成**别人可以独
 
 | 层 | 职责 |
 | --- | --- |
-| 会话层 | Cursor 钩子：`afterFileEdit` 记 dirty；`stop` 有 dirty 时跑相关用例；`git commit` 时全量门禁 |
+| 会话层 | Cursor / Qoder 钩子：改文件记 dirty；stop 有 dirty 时跑相关用例；`git commit` 时全量门禁 |
 | 工具层 | `gate run --changed` 开发中增量；`gate run` 全量写回执；`gate check` 一秒复核；`integrity` / `policy` 锁基线；`audit` 独立复核；`health` 出健康页 |
 | 人写的判据 | `adone.toml`、验收契约、需求台账。入库。 |
 | 磁盘上的证据 | 回执、回执链、两份基线、审计结论、健康报告。基线与链头建议入库，回执本身不必。 |
@@ -135,6 +135,10 @@ adone install --with-hooks         # 技能 + 钩子 + 本机 .git/hooks/pre-com
 adone health --open                # 出一页健康度报告并打开
 ```
 
+Cursor 用户不用改任何东西：默认 `--ide auto` 看不出 Qoder 就只写 `.cursor/hooks.json`。
+只用 Qoder：在 Qoder 终端里跑同一条（认 `QODER_PROJECT_DIR`），或从普通终端加 `--ide qoder`。
+改完 `.qoder/settings.json` 后要重启 Qoder（官方尚未热重载）。
+
 要拆掉（和 `init` 配套，拆完门禁和钩子都不再跑）：
 
 ```bash
@@ -225,12 +229,15 @@ Windows 上升完必须 `adone install --hooks-only --force`，然后确认 comm
 | --- | --- | --- |
 | 改了受监视文件之后（人或 Agent 手跑；`stop` 钩子也会跑） | `adone gate run --changed` | 否，只写 `.adone/partial.json` |
 | 宣称完成、交付、`git commit` | `adone gate run` | 是，完成证据只认这份 |
+| 多模块 Maven、只想重跑变过的模块 | `adone gate run --affected` | 是，回执写明哪些继承自上一份全量 |
 | 随时复核全量回执是否新鲜 | `adone gate check` | 否，约 1 秒 |
 
 ```bash
 adone gate run --changed   # 只跑与 dirty / git diff 相关的用例
 adone gate run             # 全量，写回执
+adone gate run --affected  # 只跑变过的模块（要先有一份带单元哈希的全量绿回执）
 adone gate check           # 树哈希必须对上 latest.json
+adone gate slow            # 最近一轮最慢的用例 / 模块
 ```
 
 `--changed` 的文件名单：`.adone/dirty` 与 `git status`（含未跟踪）合并。
@@ -246,6 +253,7 @@ git 会在项目根和每个 `watch_roots` 各定位一次仓库，所以子目�
 ```bash
 adone install --with-hooks          # 技能 + hooks.json + 本机 pre-commit
 adone install --hooks-only --force  # 升完 adone 或换了钩子口径时重渲
+adone install --with-hooks --ide qoder   # 只写 .qoder/settings.json，不碰 .cursor/
 ```
 
 | 事件 | 钩子 | 做什么 |
@@ -295,6 +303,38 @@ git commit
 
 人在终端 `git commit` 会撞上 pre-commit；Agent 跑 `git commit` 会先撞上
 `commit-guard`，过了再走 pre-commit。两条都装，`--no-verify` 也绕不过 Cursor 那条。
+
+提交路径默认仍是全量。要让 pre-commit 走范围化全量，在 `adone.toml` 里显式写：
+
+```toml
+[gate]
+commit_scope = "affected"
+```
+
+然后 `adone install --hooks-only --force`（钩子脚本会跑 `gate run --for-commit`）。
+Gradle 没有 `-amd`，`--affected` 会被拒绝，不会偷偷少跑。
+
+### 全量跑太久怎么查
+
+先分清是卡住还是真慢。门禁步骤现在边跑边打输出；静默超过 60 秒会打一行心跳。
+卡死长得像在跑，是以前最常见的误判。
+
+1. **是不是卡住。** 看有没有心跳、有没有「超时被中断」。每步可配 `timeout_seconds` /
+   `stall_seconds`（默认不限时，超时不进判据快照）。超时会把 surefire fork 出的 JVM
+   一并杀掉，避免孤儿进程占着端口、下一次再冲突。
+2. **是不是端口冲突。** 失败步骤的 note 会写「端口 8080 被占」以及 Spring
+   测试上下文缓存这个根因。串行也会撞：前一个 `@SpringBootTest` 没关，socket
+   还在它手里。改成 `webEnvironment = RANDOM_PORT`。
+3. **慢在哪。** `adone gate slow` 读 surefire XML 的 `time`，按用例和按模块出榜。
+   多模块 Spring 十有八九是上下文重复启动，不是用例数。
+4. **再谈并发或缩范围。** 固定端口下开 surefire 并行，冲突会变成间歇性变红，
+   最后一定被团队关掉。先隔离端口，或用 `--affected` 少跑。
+
+固定端口暂时改不掉时的退路：surefire `${surefire.forkNumber}` 给每个 fork 一段端口；
+JUnit 5 `@ResourceLock` 只串行化占端口的那批；容器 / `unshare -n` 做网络命名空间隔离。
+
+**固定端口的测试有可能连上本机已在跑的旧版服务然后通过。** 回执绑的是新代码的树哈希，
+测试打的是旧进程——那是真的假绿。
 
 <br/><br/>
 
@@ -361,8 +401,12 @@ name = "mvn test"
 cwd = "."
 kind = "test"
 adapter = "java"
+# timeout_seconds = 1800   # 可选。默认不限时；超时会杀掉进程树
 argv = ["mvn", "-B", "-ntp", "jacoco:prepare-agent", "test", "jacoco:report"]
 ```
+
+多模块时把每个模块的 `src` 写进 `watch_roots`。先跑一次全量拿到带单元哈希的回执，
+之后 `adone gate run --affected` 只重跑变过的模块。
 
 要按本机核数并行跑 JUnit 5，把开关写进同一步的 `argv`（判据基线锁的是命令，不是 pom）：
 

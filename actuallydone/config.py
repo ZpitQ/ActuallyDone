@@ -55,6 +55,9 @@ DEFAULTS: dict[str, Any] = {
         "min_tree_files": 1,
         "keep_receipts": 20,
         "step": [],
+        # 提交时跑全量还是只跑受影响模块。空 / full = 全量（默认）；affected 才缩范围。
+        # 这一项改的是「完成」的口径，升级时不许静默改变任何人的门槛。
+        "commit_scope": "",
     },
     "coverage": {"threshold": None, "source": ""},
     "tests": {"roots": [], "adapter": "", "baseline_exempt": []},

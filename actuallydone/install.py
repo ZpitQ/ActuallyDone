@@ -156,7 +156,7 @@ def _hooks_note(cfg: Config, cmd: str) -> str:
                 f"问答、读代码、没改受监视文件时钩子不应出现。"
                 f"`git commit` 时 `beforeShellExecution` 先 `{cmd} gate check`，"
                 f"全量回执对不上就拒绝（`--no-verify` 也拦）；"
-                f"本机 `.git/hooks/pre-commit` 在回执不新鲜时跑全量 `{cmd} gate run`。")
+                f"本机 `.git/hooks/pre-commit` 在回执不新鲜时跑 `{cmd} gate run --for-commit`。")
     return (f"本项目还没装钩子。装上之后（`{cmd} install --with-hooks`），"
             f"改了受监视文件后的 stop 只跑相关用例；提交时才跑全量门禁。")
 
@@ -213,6 +213,46 @@ def _write_failed(cfg: Config, dst, err: OSError, n_done: int) -> int:
     return 1
 
 
+def qoder_present(root: Path) -> bool:
+    """本机或这个项目看得出在用 Qoder。"""
+    if os.environ.get("QODER_PROJECT_DIR") or os.environ.get("QODER_HOME"):
+        return True
+    return (root / ".qoder" / "settings.json").is_file()
+
+
+def _wanted_ides(root: Path, ide: str, installing_hooks: bool) -> frozenset[str]:
+    """auto：看不出 Qoder 就只装 Cursor。--ide qoder 不碰 .cursor/。"""
+    if ide == "cursor":
+        return frozenset({"cursor"})
+    if ide == "qoder":
+        return frozenset({"qoder"})
+    if ide == "all":
+        return frozenset({"cursor", "qoder"})
+    # auto，且这次不是在装钩子：技能仍只写 Cursor 默认目录，和今天一样
+    if not installing_hooks:
+        return frozenset({"cursor"})
+    qoder = qoder_present(root)
+    cursor = (root / ".cursor" / "hooks.json").is_file()
+    if qoder and cursor:
+        return frozenset({"cursor", "qoder"})
+    if qoder:
+        return frozenset({"qoder"})
+    return frozenset({"cursor"})
+
+
+def _skill_dests(cfg: Config, skills_root: Path, ides: frozenset[str]) -> list[Path]:
+    dests: list[Path] = []
+    seen: set[Path] = set()
+    if "cursor" in ides:
+        dests.append(skills_root)
+        seen.add(skills_root.resolve())
+    if "qoder" in ides:
+        q = cfg.root / ".qoder" / "skills"
+        if q.resolve() not in seen:
+            dests.append(q)
+    return dests
+
+
 def cmd_install(cfg: Config, args) -> int:
     v = variables(cfg)
     skills_root = Path(args.skills_dir).resolve() if args.skills_dir else cfg.skills_dir
@@ -231,31 +271,38 @@ def cmd_install(cfg: Config, args) -> int:
             print(f"不认识的技能：{'、'.join(sorted(unknown))}", file=sys.stderr)
             return 2
 
-    n_write = n_skip = 0
-    for name in want:
-        src_dir = TEMPLATES / "skills" / name
-        for src in sorted(src_dir.rglob("*")):
-            if not src.is_file():
-                continue
-            dst = skills_root / name / src.relative_to(src_dir)
-            if dst.exists() and not args.force:
-                print(f"  跳过已存在的 {dst.relative_to(cfg.root)}（要覆盖加 --force）")
-                n_skip += 1
-                continue
-            content = render(src.read_text(encoding="utf-8"), v)
-            if args.dry_run:
-                print(f"  [演练] 将写入 {dst.relative_to(cfg.root)}（{len(content)} 字节）")
-            else:
-                try:
-                    _write(dst, content)
-                except OSError as e:
-                    return _write_failed(cfg, dst, e, n_write)
-                print(f"  写入 {dst.relative_to(cfg.root)}")
-            n_write += 1
+    installing_hooks = bool(args.with_hooks or hooks_only)
+    # 老测试 / 内部调用没传 --ide：只装 Cursor，避免本机 QODER_* 把回归带跑偏
+    ide = getattr(args, "ide", None) or "cursor"
+    ides = _wanted_ides(cfg.root, ide, installing_hooks=installing_hooks)
+    skill_dests = _skill_dests(cfg, skills_root, ides)
 
-    if args.with_hooks or hooks_only:   # --hooks-only 隐含 --with-hooks
+    n_write = n_skip = 0
+    for dest_root in skill_dests:
+        for name in want:
+            src_dir = TEMPLATES / "skills" / name
+            for src in sorted(src_dir.rglob("*")):
+                if not src.is_file():
+                    continue
+                dst = dest_root / name / src.relative_to(src_dir)
+                if dst.exists() and not args.force:
+                    print(f"  跳过已存在的 {dst.relative_to(cfg.root)}（要覆盖加 --force）")
+                    n_skip += 1
+                    continue
+                content = render(src.read_text(encoding="utf-8"), v)
+                if args.dry_run:
+                    print(f"  [演练] 将写入 {dst.relative_to(cfg.root)}（{len(content)} 字节）")
+                else:
+                    try:
+                        _write(dst, content)
+                    except OSError as e:
+                        return _write_failed(cfg, dst, e, n_write)
+                    print(f"  写入 {dst.relative_to(cfg.root)}")
+                n_write += 1
+
+    if installing_hooks:
         try:
-            n_write += _install_hooks(cfg, v, args)
+            n_write += _install_hooks(cfg, v, args, ides)
         except OSError as e:
             return _write_failed(cfg, getattr(e, "filename", None), e, n_write)
 
@@ -288,10 +335,25 @@ def hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
     hooks_dir = cfg.root / ".cursor" / "hooks"
     launchers = [hooks_dir / n for n in OUR_LAUNCHERS]
     leftover_py = [hooks_dir / n for n in OUR_SCRIPTS if (hooks_dir / n).is_file()]
-    if not hooks_json.exists() and not any(p.exists() for p in launchers) and not leftover_py:
+    cursor_on = (hooks_json.exists()
+                 or any(p.exists() for p in launchers) or leftover_py)
+    if not cursor_on:
         lines.append("  钩子：未安装（要装跑 adone install --with-hooks）")
-        return lines, problems
+    else:
+        _cursor_hooks_report(cfg, hooks_json, hooks_dir, leftover_py, lines, problems)
 
+    q_lines, q_probs = _qoder_hooks_report(cfg)
+    lines += q_lines
+    problems += q_probs
+
+    if cursor_on or (cfg.root / ".qoder" / "settings.json").is_file():
+        _pre_commit_report(cfg, lines, problems)
+    return lines, problems
+
+
+def _cursor_hooks_report(cfg: Config, hooks_json: Path, hooks_dir: Path,
+                         leftover_py: list[Path],
+                         lines: list[str], problems: list[str]) -> None:
     events = _read_json(hooks_json).get("hooks") or {}
     registered = json.dumps(events, ensure_ascii=False)
 
@@ -334,20 +396,54 @@ def hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
                         "这是 v1.3.14 之前装的登记，重跑 "
                         "adone install --hooks-only --force")
 
-    # 两条路各管一半：Cursor 钩子只看得见 Agent 跑的 shell，你自己在终端敲的
+
+def _pre_commit_report(cfg: Config, lines: list[str], problems: list[str]) -> None:
+    # 两条路各管一半：Agent 钩子只看得见 Agent 跑的 shell，你自己在终端敲的
     # git commit 只有 .git/hooks/pre-commit 拦得住。缺哪条都是「安静地不设防」。
     pre, why, _ = git_pre_commit_path(cfg.root)
     if pre is None:
         lines.append(f"  git pre-commit：跳过（{why}）")
     elif pre.is_file() and PRE_COMMIT_MARK in pre.read_text(encoding="utf-8",
                                                             errors="replace"):
-        lines.append(f"  git pre-commit：已装于 {pre}（回执不新鲜时跑全量 gate run）")
+        lines.append(f"  git pre-commit：已装于 {pre}（回执不新鲜时跑 gate run --for-commit）")
     elif pre.is_file():
         problems.append(f"{pre} 是别人写的，不含 adone 那段：手工 git commit 不会跑全量门禁。"
                         f"要接管加 adone install --hooks-only --force")
     else:
         problems.append(f"{pre} 不存在：Agent 之外的 git commit（你自己在终端敲的）"
                         f"不会跑全量门禁。跑 adone install --hooks-only --force 写入本机")
+
+
+def _qoder_event_has_ours(entries) -> bool:
+    return any(qoder_entry_is_ours(h) for h in (entries or []))
+
+
+def _qoder_hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
+    """没装 Qoder 不算问题。settings.json 在但缺 Stop / PreToolUse 才报装了一半。"""
+    path = cfg.root / ".qoder" / "settings.json"
+    if not path.is_file():
+        return [], []
+    lines: list[str] = []
+    problems: list[str] = []
+    events = _read_json(path).get("hooks") or {}
+    has_ours = any(_qoder_event_has_ours(entries) for entries in events.values())
+    if not has_ours:
+        lines.append("  Qoder 钩子：.qoder/settings.json 在，没有 adone 登记")
+        return lines, problems
+    has_stop = _qoder_event_has_ours(events.get("Stop"))
+    has_pre = _qoder_event_has_ours(events.get("PreToolUse"))
+    if not (has_stop and has_pre):
+        problems.append("Qoder 钩子装了一半：.qoder/settings.json 在，但缺少 Stop "
+                        "或 PreToolUse 的 adone 登记。重跑 "
+                        "adone install --hooks-only --force --ide qoder")
+        return lines, problems
+    found = _resolve_adone(cfg.root, adone_entry(cfg), shutil.which("adone") or "")
+    if found:
+        lines.append(f"  Qoder 钩子：已装，跑门禁时用 {found} hook")
+    else:
+        problems.append("Qoder 钩子找不到 adone（仓库内入口、PATH 都不行）："
+                        "装好 adone 后重跑 adone install --hooks-only --force --ide qoder")
+    lines.append("  Qoder 提交：PreToolUse 命中 Bash/Shell 的 git commit 时先 gate check")
     return lines, problems
 
 
@@ -574,6 +670,111 @@ def our_hooks(cfg: Config | None = None) -> dict:
     }
 
 
+def qoder_hook_argv(name: str, cfg: Config | None = None) -> tuple[str, list[str]]:
+    """Qoder 用 exec 形式：单个可执行文件 + argv，不复制 .exe 进 .cursor/hooks/。"""
+    if cfg is not None:
+        entry = adone_entry(cfg)
+        if entry:
+            if os.name == "nt":
+                if shutil.which("py"):
+                    return "py", ["-3", entry, "hook", name]
+                return "python", [entry, "hook", name]
+            return "python3", [entry, "hook", name]
+    on_path = shutil.which("adone") or ""
+    if on_path:
+        return on_path, ["hook", name]
+    if os.name == "nt":
+        if shutil.which("py"):
+            return "py", ["-3", "-m", "actuallydone", "hook", name]
+        return "python", ["-m", "actuallydone", "hook", name]
+    return "python3", ["-m", "actuallydone", "hook", name]
+
+
+def qoder_hook_handler(name: str, cfg: Config | None = None) -> dict:
+    timeout = {"mark-dirty": 10, "gate-guard": 180, "commit-guard": 30}[name]
+    command, args = qoder_hook_argv(name, cfg)
+    return {"type": "command", "command": command, "args": args, "timeout": timeout}
+
+
+def our_qoder_hooks(cfg: Config | None = None) -> dict:
+    dirty = qoder_hook_handler("mark-dirty", cfg)
+    stop = qoder_hook_handler("gate-guard", cfg)
+    commit = qoder_hook_handler("commit-guard", cfg)
+    return {
+        "PostToolUse": [{
+            "matcher": "Write|Edit|search_replace|create_file",
+            "hooks": [dirty],
+        }],
+        "Stop": [{
+            "hooks": [stop],
+        }],
+        "PreToolUse": [
+            {"matcher": "Bash", "hooks": [commit]},
+            {"matcher": "Shell", "hooks": [commit]},
+        ],
+    }
+
+
+def _qoder_ours_tokens() -> tuple[str, ...]:
+    return (*OUR_SCRIPTS, *OUR_LAUNCHERS, *OUR_EXES, *LEGACY_SCRIPTS,
+            "actuallydone", "hook mark-dirty", "hook gate-guard",
+            "hook commit-guard")
+
+
+def qoder_leaf_is_ours(obj: dict) -> bool:
+    cmd = str(obj.get("command") or "")
+    args = obj.get("args") or []
+    blob = cmd + " " + " ".join(str(a) for a in args)
+    return any(s in blob for s in _qoder_ours_tokens())
+
+
+def qoder_entry_is_ours(obj) -> bool:
+    """这条（含嵌套 hooks）是不是带了我们的 command/args。"""
+    if not isinstance(obj, dict):
+        return False
+    if qoder_leaf_is_ours(obj):
+        return True
+    return any(qoder_entry_is_ours(h) for h in (obj.get("hooks") or []))
+
+
+def strip_qoder_entry(obj):
+    """去掉我们的叶子。整组删空则返回 None，混合组只留下别人的。"""
+    if not isinstance(obj, dict):
+        return obj
+    inner = obj.get("hooks")
+    if isinstance(inner, list) and inner:
+        kept = [s for h in inner if (s := strip_qoder_entry(h)) is not None]
+        if not kept:
+            return None
+        out = dict(obj)
+        out["hooks"] = kept
+        return out
+    if qoder_leaf_is_ours(obj):
+        return None
+    return obj
+
+
+def merge_qoder_hooks(existing: dict, cfg: Config | None = None) -> tuple[dict, int]:
+    """按事件数组合并，只替换 command/args 里带我们标记的条目。"""
+    out = dict(existing) if existing else {}
+    events = dict(out.get("hooks") or {})
+    ours_all = our_qoder_hooks(cfg)
+    kept = 0
+    for event, ours in ours_all.items():
+        foreign = []
+        for h in (events.get(event) or []):
+            stripped = strip_qoder_entry(h)
+            if stripped is not None:
+                foreign.append(stripped)
+        kept += len(foreign)
+        events[event] = foreign + [dict(h) for h in ours]
+    for event, hooks in (out.get("hooks") or {}).items():
+        if event not in ours_all:
+            kept += len(hooks or [])
+    out["hooks"] = events
+    return out, kept
+
+
 def _read_json(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -607,7 +808,40 @@ def merge_hooks(existing: dict, cfg: Config | None = None) -> tuple[dict, int]:
     return out, kept
 
 
-def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
+def _install_hooks(cfg: Config, v: dict[str, str], args,
+                   ides: frozenset[str] | None = None) -> int:
+    if ides is None:
+        ides = _wanted_ides(cfg.root, getattr(args, "ide", None) or "cursor",
+                            installing_hooks=True)
+    written = 0
+    if "cursor" in ides:
+        written += _install_cursor_hooks(cfg, v, args)
+    if "qoder" in ides:
+        written += _install_qoder_hooks(cfg, args)
+    written += _install_git_pre_commit(cfg, args)
+    return written
+
+
+def _install_qoder_hooks(cfg: Config, args) -> int:
+    dest = cfg.root / ".qoder" / "settings.json"
+    if dest.exists() and not args.force:
+        print(f"  跳过已存在的 {dest.relative_to(cfg.root)}（要覆盖加 --force，"
+              f"会保留你自己写在里面的其他钩子）；需要的配置是：\n"
+              f"{json.dumps(our_qoder_hooks(cfg), ensure_ascii=False, indent=2)}")
+        return 0
+    merged, kept = merge_qoder_hooks(_read_json(dest), cfg)
+    if args.dry_run:
+        print(f"  [演练] 将写入 {dest.relative_to(cfg.root)}"
+              + (f"（保留其中 {kept} 条不属于 adone 的钩子）" if kept else ""))
+    else:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _write(dest, json.dumps(merged, ensure_ascii=False, indent=2) + "\n")
+        print(f"  写入 {dest.relative_to(cfg.root)}"
+              + (f"（保留其中 {kept} 条不属于 adone 的钩子）" if kept else ""))
+    return 1
+
+
+def _install_cursor_hooks(cfg: Config, v: dict[str, str], args) -> int:
     hooks_dir = cfg.root / ".cursor" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     written = 0
@@ -692,13 +926,12 @@ def _install_hooks(cfg: Config, v: dict[str, str], args) -> int:
             print(f"  写入 {cfg_path.relative_to(cfg.root)}"
                   + (f"（保留其中 {kept} 条不属于 adone 的钩子）" if kept else ""))
         written += 1
-    written += _install_git_pre_commit(cfg, args)
     return written
 
 
 PRE_COMMIT_SH = """#!/bin/sh
 # actuallydone pre-commit — 本机生成，不要入库。
-# 全量回执已新鲜则放行；否则跑 adone gate run。
+# 全量回执已新鲜则放行；否则跑 adone gate run --for-commit。
 root=$(git rev-parse --show-toplevel) || exit 1
 # 进的是 adone.toml 那一层，不是仓库根：多模块工作区里两者常常不是同一个目录，
 # 站在仓库根上 adone 往上找不到配置，会把「没配置」当成「不许提交」。
@@ -720,8 +953,8 @@ run() {
 if run gate check >/dev/null 2>&1; then
   exit 0
 fi
-echo "pre-commit: 全量回执不新鲜或不通过，跑 adone gate run" >&2
-run gate run
+echo "pre-commit: 全量回执不新鲜或不通过，跑 adone gate run --for-commit" >&2
+run gate run --for-commit
 """
 
 
@@ -800,5 +1033,5 @@ def _install_git_pre_commit(cfg: Config, args) -> int:
         dest.chmod(dest.stat().st_mode | 0o111)
     except OSError:
         pass
-    print(f"  写入 {where}（本机，不入库：回执不新鲜时跑全量 gate run）")
+    print(f"  写入 {where}（本机，不入库：回执不新鲜时跑 gate run --for-commit）")
     return 1

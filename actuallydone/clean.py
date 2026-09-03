@@ -14,7 +14,7 @@ from pathlib import Path
 from .config import CONFIG_NAME, Config, ConfigError, find_root
 from .install import (GENERIC_SKILLS, LEGACY_SCRIPTS, OUR_EXES, OUR_LAUNCHERS,
                       OUR_SCRIPTS, PRE_COMMIT_MARK, PROJECT_SKILLS,
-                      git_pre_commit_path)
+                      git_pre_commit_path, strip_qoder_entry)
 
 
 def _rel(root: Path, p: Path) -> str:
@@ -48,6 +48,30 @@ def _strip_hooks_json(data: dict) -> tuple[dict | None, int]:
     return out, kept
 
 
+def _strip_qoder_settings(data: dict) -> tuple[dict | None, int]:
+    """去掉 .qoder/settings.json 里我们的条目，留下别人的。"""
+    events = dict(data.get("hooks") or {})
+    kept = 0
+    out_events: dict = {}
+    for event, entries in events.items():
+        foreign = []
+        for h in (entries or []):
+            stripped = strip_qoder_entry(h)
+            if stripped is not None:
+                foreign.append(stripped)
+        kept += len(foreign)
+        if foreign:
+            out_events[event] = foreign
+    rest = {k: v for k, v in data.items() if k != "hooks"}
+    if not out_events:
+        if rest:
+            return rest, kept
+        return None, kept
+    out = dict(data)
+    out["hooks"] = out_events
+    return out, kept
+
+
 def _plan(root: Path, cfg: Config | None) -> list[tuple[str, Path, str]]:
     """返回 (动作, 路径, 给人看的说明)。动作：delete / rewrite / empty-dir。"""
     items: list[tuple[str, Path, str]] = []
@@ -72,6 +96,12 @@ def _plan(root: Path, cfg: Config | None) -> list[tuple[str, Path, str]]:
         if d.exists():
             items.append(("delete", d, f"技能 {name}"))
 
+    qoder_skills = root / ".qoder" / "skills"
+    for name in (*GENERIC_SKILLS, *PROJECT_SKILLS):
+        d = qoder_skills / name
+        if d.exists():
+            items.append(("delete", d, f"Qoder 技能 {name}"))
+
     hooks_json = root / ".cursor" / "hooks.json"
     if hooks_json.is_file():
         data = {}
@@ -89,6 +119,25 @@ def _plan(root: Path, cfg: Config | None) -> list[tuple[str, Path, str]]:
             if ours_were_there:
                 items.append(("rewrite", hooks_json,
                               f"钩子登记（去掉 adone，留下 {kept} 条别人的）"))
+
+    qoder_settings = root / ".qoder" / "settings.json"
+    if qoder_settings.is_file():
+        data = {}
+        try:
+            raw = json.loads(qoder_settings.read_text(encoding="utf-8"))
+            data = raw if isinstance(raw, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        stripped, kept = _strip_qoder_settings(data)
+        if stripped is None:
+            if data.get("hooks"):
+                items.append(("delete", qoder_settings, "Qoder 钩子登记（里面只剩我们的条目）"))
+        elif stripped is not None:
+            ours_were_there = json.dumps(data, ensure_ascii=False) != json.dumps(
+                stripped, ensure_ascii=False)
+            if ours_were_there:
+                items.append(("rewrite", qoder_settings,
+                              f"Qoder 钩子登记（去掉 adone，留下 {kept} 条别人的）"))
 
     hooks_dir = root / ".cursor" / "hooks"
     for name in (*OUR_LAUNCHERS, *OUR_EXES, *OUR_SCRIPTS, *LEGACY_SCRIPTS):
@@ -166,7 +215,10 @@ def cmd_clean(args) -> int:
         parent = path.parent
         if action == "rewrite":
             data = json.loads(path.read_text(encoding="utf-8"))
-            stripped, _ = _strip_hooks_json(data)
+            if path.name == "settings.json" and path.parent.name == ".qoder":
+                stripped, _ = _strip_qoder_settings(data)
+            else:
+                stripped, _ = _strip_hooks_json(data)
             if stripped is None:
                 path.unlink(missing_ok=True)
                 print(f"  删除 {_rel(root, path)}")

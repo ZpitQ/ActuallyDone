@@ -1,9 +1,12 @@
-"""Cursor 钩子的实现。由 `adone hook <名>` 调用，不在 .cursor/hooks/ 里放 .py。
+"""Agent 钩子的实现。由 `adone hook <名>` 调用，不在平台目录里放 .py。
 
 Windows 上 .cursor/hooks/*.py 会被当成「要打开的文件」：Cursor 自己就是 .py
 的默认应用，stop 一触发就弹出 gate-guard.py，脚本一行都没跑。
 逻辑全部在本模块。Windows 登记 .exe（另写 .cmd 只给手跑）；
 macOS / Linux 登记 `python3 -m actuallydone hook …`，不写 .cmd。
+
+Qoder 读的是另一套事件和出口（exit 2 / permissionDecision）。同一套判定，
+按 payload / 环境选协议；Cursor 的 stdout JSON 一个字不改。
 """
 
 from __future__ import annotations
@@ -21,6 +24,21 @@ from pathlib import Path
 from .config import Config, ConfigError, find_root
 
 MAX_LOOPS = 3
+
+# 本轮 stdin 判定的协议。默认 cursor：老钩子没 Qoder 字段时出口必须和从前一样。
+_protocol = "cursor"
+
+# Qoder 的 hook_event_name 是 PascalCase。Cursor 即使用同一字段，写的也是
+# afterFileEdit / stop / postToolUse。只认下面这些，才不会把 Cursor 回推改成 exit 2。
+_QODER_EVENTS = frozenset({
+    "SessionStart", "SessionEnd", "UserPromptSubmit",
+    "PreToolUse", "PostToolUse", "PostToolUseFailure",
+    "PermissionRequest", "PermissionDenied",
+    "Stop", "StopFailure", "SubagentStart", "SubagentStop",
+    "PreCompact", "PostCompact", "Notification", "InstructionsLoaded",
+    "ConfigChange", "CwdChanged", "FileChanged",
+    "WorktreeCreate", "WorktreeRemove", "Elicitation", "ElicitationResult",
+})
 
 
 def read_stdin_bytes() -> bytes:
@@ -114,12 +132,31 @@ def _sample(text: str, n: int = 160) -> str:
 
 def _payload() -> dict:
     payload, _ = parse_payload(decode_stdin(read_stdin_bytes()))
-    return payload if isinstance(payload, dict) else {}
+    return _begin(payload)
 
 
 def _root() -> Path:
-    start = Path(os.environ.get("CURSOR_PROJECT_DIR") or os.getcwd())
+    start = Path(os.environ.get("CURSOR_PROJECT_DIR")
+                 or os.environ.get("QODER_PROJECT_DIR")
+                 or os.getcwd())
     return find_root(start) or start.resolve()
+
+
+def qoder_detected(payload: dict | None = None) -> bool:
+    """Qoder 协议：环境是 Qoder 开的，或 payload 带 Qoder 的 hook_event_name。"""
+    if os.environ.get("QODER_PROJECT_DIR") or os.environ.get("QODER_HOME"):
+        return True
+    if isinstance(payload, dict) and payload.get("hook_event_name") in _QODER_EVENTS:
+        return True
+    return False
+
+
+def _begin(payload: dict | None) -> dict:
+    """记下本轮协议。payload 不是 dict 时按空对象，协议仍可能来自环境。"""
+    global _protocol
+    data = payload if isinstance(payload, dict) else {}
+    _protocol = "qoder" if qoder_detected(data) else "cursor"
+    return data
 
 
 def _log(cfg: Config | None, event: str, msg: str, root: Path | None = None) -> None:
@@ -132,14 +169,7 @@ def _log(cfg: Config | None, event: str, msg: str, root: Path | None = None) -> 
         pass
 
 
-def _emit(obj: dict) -> int:
-    """把钩子结果写到 stdout。Windows 上必须立刻刷出，并多等一小会儿。
-
-    Cursor 在 Windows 上经过 PowerShell 收 stdout：进程一退出就当收完，
-    管道里还没到的字节会被丢掉。Execution Log 里变成 `{}`，Agent 窗口
-    看不到 followup_message——官方承认这是他们的 bug。
-    中文走系统代码页（cp936）时，Node 端按 UTF-8 解析也会失败，同样像没回推。
-    """
+def _write_stdout(obj: dict) -> None:
     data = json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n"
     buf = getattr(sys.stdout, "buffer", None)
     if buf is not None:
@@ -148,8 +178,46 @@ def _emit(obj: dict) -> int:
     else:
         sys.stdout.write(data.decode("utf-8"))
         sys.stdout.flush()
-    if obj.get("followup_message") and os.name == "nt":
-        time.sleep(0.2)
+
+
+def _emit(obj: dict) -> int:
+    """把钩子结果写到 stdout。Windows 上必须立刻刷出，并多等一小会儿。
+
+    Cursor 在 Windows 上经过 PowerShell 收 stdout：进程一退出就当收完，
+    管道里还没到的字节会被丢掉。Execution Log 里变成 `{}`，Agent 窗口
+    看不到 followup_message——官方承认这是他们的 bug。
+    中文走系统代码页（cp936）时，Node 端按 UTF-8 解析也会失败，同样像没回推。
+
+    Qoder 不认 followup_message：拦 stop 用 exit 2 + stderr，拦 commit 用
+    permissionDecision。Cursor 这条成功路径（exit 0 + JSON）一个字不改。
+    """
+    global _protocol
+    try:
+        if _protocol == "qoder":
+            return _emit_qoder(obj)
+        _write_stdout(obj)
+        if obj.get("followup_message") and os.name == "nt":
+            time.sleep(0.2)
+        return 0
+    finally:
+        _protocol = "cursor"
+
+
+def _emit_qoder(obj: dict) -> int:
+    if obj.get("followup_message"):
+        print(obj["followup_message"], file=sys.stderr)
+        return 2
+    if obj.get("permission") == "deny":
+        reason = obj.get("agent_message") or obj.get("user_message") or "拒绝"
+        _write_stdout({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        })
+        return 2
+    _write_stdout({})
     return 0
 
 
@@ -260,6 +328,7 @@ def cmd_mark_dirty(_args=None) -> int:
     data = read_stdin_bytes()
     raw = decode_stdin(data)
     payload, note = parse_payload(raw)
+    _begin(payload if isinstance(payload, dict) else {})
 
     event = ""
     if isinstance(payload, dict):
@@ -323,6 +392,9 @@ def cmd_gate_guard(_args=None) -> int:
     cfg, root = _load()
     _log(cfg, "stop", "gate-guard launched", root)
     payload = _payload()
+    if payload.get("stop_hook_active") in (True, "true", "True", 1, "1"):
+        _log(cfg, "stop", "stop_hook_active，放行", root)
+        return _emit({})
     status = payload.get("status")
     loops = int(payload.get("loop_count") or 0)
 
@@ -402,6 +474,10 @@ def cmd_commit_guard(_args=None) -> int:
     _log(cfg, "beforeShellExecution", "commit-guard launched", root)
     payload = _payload()
     command = payload.get("command") or ""
+    if not command:
+        tool_input = payload.get("tool_input")
+        if isinstance(tool_input, dict):
+            command = tool_input.get("command") or ""
     if not _is_git_commit(command):
         return _emit({"permission": "allow"})
 

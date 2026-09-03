@@ -80,7 +80,7 @@ def detect(root: Path) -> Detected:
 
     got.docs = [c for c in DOC_CANDIDATES if (root / c).exists()]
 
-    for cand in (".cursor/skills", ".claude/skills"):
+    for cand in (".cursor/skills", ".claude/skills", ".qoder/skills"):
         if (root / cand).is_dir():
             got.skills_dir = cand
             break
@@ -554,13 +554,53 @@ def cmd_doctor(cfg: Config, args) -> int:
                         f"可用：{'、'.join(R)}")
 
     try:
-        from .gate import tree_hash
+        from .gate import (find_full_receipt, inheritable_full, tree_hash,
+                           unit_file_counts, unit_hashes)
         h, n = tree_hash(cfg)
         print(f"  受监视代码树：{n} 个文件，哈希 {h[:12]}")
         floor = int(cfg.get("gate.min_tree_files", 1) or 1)
         if floor <= 1 and n > 20:
             problems.append(f"min_tree_files 还是 {floor}（等于没有保护），"
                             f"当前实测 {n} 个文件，建议填一个略低于它的值")
+        counts = unit_file_counts(cfg)
+        print(f"  单元：{len(counts)} 个 watch_roots")
+        for unit, cn in counts.items():
+            print(f"    {unit}：{cn} 个文件")
+        can_scope = False
+        from .adapters import get as get_scope_ad
+        for spec in cfg.get("gate.step") or []:
+            if spec.get("kind") != "test":
+                continue
+            ad_s = get_scope_ad(spec.get("adapter") or cfg.get("tests.adapter") or "",
+                                cfg.root)
+            scoped = ad_s.scoped_test_argv(
+                list(spec.get("argv") or []), list(unit_hashes(cfg)),
+                cwd=cfg.root / (spec.get("cwd") or "."))
+            if scoped is not None:
+                can_scope = True
+                break
+        if can_scope:
+            print("  缩范围：当前测试步骤支持 --affected（Maven -pl/-amd）")
+        else:
+            print("  缩范围：当前适配器/构建工具不会按模块缩范围"
+                  "（Gradle 没有 -amd）。--affected 会被拒绝")
+        want_affected = (cfg.get("gate.commit_scope") or "") == "affected"
+        if want_affected and not can_scope:
+            problems.append("gate.commit_scope 是 affected，但当前适配器不会缩范围："
+                            "提交时 --for-commit 会拒绝。改回全量或换成 Maven")
+        src, err = inheritable_full(cfg)
+        if want_affected:
+            if err:
+                problems.append(err)
+            elif src is not None:
+                print(f"  可继承全量回执：{src.get('id')}")
+        else:
+            full = find_full_receipt(cfg)
+            if full and full.get("units"):
+                print(f"  可继承全量回执：{full.get('id')}（要用 --affected 先设 "
+                      f"gate.commit_scope = \"affected\"）")
+            else:
+                print("  可继承全量回执：还没有（先跑一次 adone gate run）")
     except Exception as e:
         problems.append(str(e))
 

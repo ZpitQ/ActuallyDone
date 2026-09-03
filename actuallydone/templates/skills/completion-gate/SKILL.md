@@ -15,7 +15,9 @@ description: 本项目里「完成」的唯一口径——必须有一份树哈�
 ```bash
 {{ADONE}} gate run --changed   # 开发中：只跑与 dirty / 本次改动相关的用例，不写 latest.json
 {{ADONE}} gate run             # 宣称完成、交付、git commit：全量门禁并写回执
+{{ADONE}} gate run --affected  # 只跑相对上一份全量绿回执变过的模块（Maven），其余继承
 {{ADONE}} gate check           # 校验全量回执是否新鲜且全绿，约 1 秒
+{{ADONE}} gate slow            # 读最近一轮 surefire 报告，列出最慢的用例
 ```
 
 开发中改了受监视文件，只跑 `--changed`。**不要**在问答或改完一个文件之后跑全量 `gate run`。

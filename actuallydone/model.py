@@ -87,6 +87,7 @@ class Step:
     seconds: float = 0.0
     note: str = ""
     output_tail: str = ""
+    timed_out: bool = False
     stdout: str = field(default="", repr=False)
     started_at: float = field(default=0.0, repr=False)
     # 命令根本没启动起来（找不到、没有执行位）。判定要据此让路，别报成「解析不出输出」
@@ -114,6 +115,8 @@ class TestResult:
     skipped_names: list[str] = field(default_factory=list)
     coverage: float | None = None
     parsed: bool = True
+    # 本轮真跑过的通过名单。范围化全量时 passed_names 还含继承的，两者必须分开
+    ran_names: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
@@ -122,6 +125,7 @@ class TestResult:
             "passed_names": sorted(set(self.passed_names)),
             "failed_names": sorted(set(self.failed_names)),
             "skipped_names": sorted(set(self.skipped_names)),
+            "ran_names": sorted(set(self.ran_names)),
             "coverage": self.coverage,
             "parsed": self.parsed,
         }

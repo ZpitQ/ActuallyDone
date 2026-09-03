@@ -39,11 +39,24 @@ def cmd_doctor(args) -> int:
 
 
 def cmd_gate_run(args) -> int:
+    if getattr(args, "changed", False) and (
+            getattr(args, "affected", False) or getattr(args, "for_commit", False)):
+        print("--changed 与 --affected / --for-commit 不能一起用", file=sys.stderr)
+        return 2
     if getattr(args, "changed", False):
         from .changed import cmd_run_changed
         return cmd_run_changed(_cfg(args))
+    cfg = _cfg(args)
+    affected = bool(getattr(args, "affected", False))
+    if getattr(args, "for_commit", False):
+        affected = (cfg.get("gate.commit_scope") or "") == "affected"
     from .gate import run_gate
-    return run_gate(_cfg(args), skip=args.skip or [])
+    return run_gate(cfg, skip=args.skip or [], affected=affected)
+
+
+def cmd_gate_slow(args) -> int:
+    from .gate import cmd_gate_slow as run
+    return run(_cfg(args), n=args.n or 20)
 
 
 def cmd_gate_check(args) -> int:
@@ -159,6 +172,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="跳过某一步（回执会被标记为不完整，check 仍会拒绝）")
     g.add_argument("--changed", action="store_true",
                    help="只跑与 dirty / git diff 相关的用例，写 partial.json，不覆盖 latest.json")
+    g.add_argument("--affected", action="store_true",
+                   help="只跑相对上一份全量绿回执变过的模块（Maven -pl/-amd），"
+                        "其余从那份回执继承。没有可继承的全量回执会拒绝")
+    g.add_argument("--for-commit", action="store_true",
+                   help="提交钩子用：按 gate.commit_scope 决定全量还是 --affected")
     g.set_defaults(func=cmd_gate_run)
 
     g = gsub.add_parser("check", help="校验回执是否新鲜且全绿")
@@ -173,6 +191,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = gsub.add_parser("hash", help="打印当前受监视代码树的哈希")
     g.set_defaults(func=cmd_gate_hash)
+
+    g = gsub.add_parser("slow", help="读最近一轮测试报告，打印最慢的用例和模块")
+    g.add_argument("-n", type=int, default=20, metavar="N",
+                   help="列出最慢的 N 条，默认 20")
+    g.set_defaults(func=cmd_gate_slow)
 
     g = gsub.add_parser("verify-contract", help="只校验验收契约")
     g.set_defaults(func=cmd_gate_contract)
@@ -232,6 +255,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("install", help="把技能与钩子模板装进项目")
     p.add_argument("--target", default="cursor", choices=["cursor", "dir"],
                    help="装到哪个 Agent 平台；dir 表示只写到 --skills-dir")
+    p.add_argument("--ide", default="auto", choices=["auto", "cursor", "qoder", "all"],
+                   help="钩子装到哪个 IDE：auto 看不出 Qoder 就只装 Cursor；"
+                        "qoder 只写 .qoder/，不碰 .cursor/")
     p.add_argument("--skills-dir", help="覆盖配置里的技能目录")
     p.add_argument("--with-hooks", action="store_true", help="同时写入钩子配置")
     p.add_argument("--hooks-only", action="store_true",
@@ -248,10 +274,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="只说要删什么，不落盘")
     p.set_defaults(func=cmd_clean)
 
-    p = sub.add_parser("hook", help="给 Cursor 钩子调用：逻辑在包里，不在 .cursor/hooks/*.py")
+    p = sub.add_parser("hook", help="给 Agent 钩子调用：逻辑在包里，不在平台目录的 .py 里")
     p.add_argument("hook", choices=["mark-dirty", "gate-guard", "commit-guard"],
-                   help="afterFileEdit 用 mark-dirty，stop 用 gate-guard，"
-                        "beforeShellExecution 用 commit-guard")
+                   help="记 dirty 用 mark-dirty，stop/Stop 用 gate-guard，"
+                        "拦 git commit 用 commit-guard")
     p.set_defaults(func=cmd_hook)
 
     p = sub.add_parser("upgrade", help="从 GitHub 拉最新版并覆盖当前安装")

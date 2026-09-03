@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from datetime import datetime
@@ -77,6 +78,54 @@ def resolve_adone(root: str) -> list[str] | None:
     return None
 
 
+def _kill_tree(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                       capture_output=True)
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=3)
+        return
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
+def _run_tree(argv: list[str], cwd: str, timeout: int):
+    """起独立进程组再跑。超时只杀 adone 自己的话，mvn fork 出的 JVM 会变孤儿占端口。"""
+    kw: dict = {}
+    if os.name == "nt":
+        flag = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        if flag:
+            kw["creationflags"] = flag
+    else:
+        kw["start_new_session"] = True
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, cwd=cwd, **kw)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        out, err = proc.communicate()
+        raise
+    return proc, out, err
+
+
 def out(obj: dict, root: str | None = None, msg: str = "") -> int:
     if root:
         log(root, msg)
@@ -118,15 +167,15 @@ def main() -> int:
         ])}, root, "找不到 adone，已回推")
 
     argv = prefix + ["gate", "check", "--json"]
-    proc = None
+    stdout = stderr = ""
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, cwd=root, timeout=120)
-        data = json.loads(proc.stdout)
+        _proc, stdout, stderr = _run_tree(argv, root, timeout=120)
+        data = json.loads(stdout)
     except Exception as e:
-        why = (proc.stderr or proc.stdout).strip()[-400:] if proc else str(e)
+        why = (stderr or stdout or str(e)).strip()[-400:]
         return out({"followup_message": "\n".join([
             f"【完成门禁没跑成】`{' '.join(argv)}` 没能给出结果（{type(e).__name__}）：",
-            "", why or str(e), "",
+            "", why, "",
             "这不等于门禁通过——现在没有任何证据表明活干完了。"
             "先把门禁修到能跑（多半是配置或入口路径的问题），再谈完成。",
         ])}, root, f"check 跑不起来（{type(e).__name__}: {e}），已回推")

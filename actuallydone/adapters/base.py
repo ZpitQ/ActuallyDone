@@ -12,6 +12,15 @@ from pathlib import Path
 
 from ..model import FuncBody, TestResult
 
+# OS 级端口冲突。Java / Go / Node 的报错都带这些字。
+PORT_CONFLICT_RE = re.compile(
+    r"(?:Address already in use|BindException|"
+    r"port\s+(\d+)\s+was already in use|"
+    r"address already in use)",
+    re.I)
+SPRING_PORT_RE = re.compile(
+    r"Port\s+(\d+)\s+was already in use", re.I)
+
 # 能力名，供上层判断某项检查能不能做
 CAP_TESTS = "tests"            # 能解析测试输出、能列出测试名
 CAP_SINGLE_TEST = "single"     # 能只跑指定的一条用例（抽查真跑用）
@@ -86,6 +95,20 @@ class Adapter:
         """
         return None
 
+    def scoped_test_argv(self, argv: list[str], units: list[str],
+                         *, cwd: Path | None = None) -> list[str] | None:
+        """把一条全量测试命令改成只跑这些单元。做不到返回 None。"""
+        return None
+
+    def slowest_tests(self, cwd: Path, *, since: float | None = None,
+                      n: int = 5) -> list[tuple] | None:
+        """最近一轮最慢的用例 [(name, seconds, module), ...]。不会就返回 None。"""
+        return None
+
+    def failure_diagnosis(self, output: str) -> str | None:
+        """这次失败像是什么原因。认不出返回 None，上层就不多说话。"""
+        return port_conflict_diagnosis(output)
+
     def related_test_argv(self, names: list[str]) -> list[str] | None:
         """一次跑这批相关用例的临时命令。做不到返回 None。
 
@@ -124,6 +147,19 @@ class Adapter:
 
 
 # ------------------------------------------------------------------ 共用工具
+
+def port_conflict_diagnosis(output: str) -> str | None:
+    if not output:
+        return None
+    m = SPRING_PORT_RE.search(output) or PORT_CONFLICT_RE.search(output)
+    if not m:
+        return None
+    port = m.group(1) if m.lastindex else None
+    where = f"端口 {port}" if port else "某个端口"
+    return (f"{where} 被占。如果冲突发生在第二个及以后的测试上下文启动时，"
+            f"那是进程或 Spring 测试上下文缓存——前一个没关、socket 还在它手里，"
+            f"串行也会撞。测试改成随机端口，或先关掉本机占着这个端口的服务。")
+
 
 def read(path: Path) -> str:
     from ..textio import read as read_text

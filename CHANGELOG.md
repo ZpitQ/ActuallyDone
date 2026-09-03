@@ -2,6 +2,44 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.4.0 — 2026-09-03
+
+范围化全量：只跑相对上一份全量绿回执变过的模块，串行照旧，工作量降一个数量级。
+
+- **`adone gate run --affected`**：按 `watch_roots` 各算一份单元哈希，变过的交给
+  Maven `-pl … -amd`（依赖闭包 maven 自己算）。Gradle 没有 `-amd`，明确拒绝，
+  不许偷偷少跑。回执写 `scope=affected`、`units`、`carried`、`tests.ran_names`；
+  `passed_names` 是本轮真跑与继承的并集——契约校验靠它，少写会把未跑模块的契约全打红。
+- **`gate check` 校验继承**：源头必须在链上且通过、继承单元哈希与源头一致、
+  本轮单元与当前一致。证据强度写成「部分重跑（继承自回执 X）」，不能和全量说同一句话。
+- **提交默认仍是全量。** 要让 pre-commit 走范围化，显式写 `gate.commit_scope = "affected"`。
+  钩子改为 `gate run --for-commit`。
+- **`adone doctor`** 报告单元划分、能不能缩范围、链上有没有可继承的全量绿回执。
+  `commit_scope = affected` 却缩不了或没有源头时，标成问题。
+- **Qoder 钩子**：`--ide {auto,cursor,qoder,all}`。`auto` 看不出 Qoder 就只装 Cursor。
+  `--ide qoder` 只写 `.qoder/` 和本机 pre-commit。运行时同一套 `adone hook`：
+  Qoder 拦 stop 用 exit 2 + stderr，拦 commit 用 `permissionDecision`；
+  Cursor 的 `followup_message` / `permission` 一个字不改。
+
+## v1.3.23 — 2026-09-03
+
+- **端口冲突要被叫出名字**：失败步骤的 note 会写「端口 8080 被占」，Java 还会点出
+  Spring 测试上下文缓存——前一个上下文没关，串行也会撞。建议 `RANDOM_PORT`。
+- **`adone gate slow`**：读 surefire XML 的 `time`，按用例和按模块出耗时榜。
+  `gate run` 测完打最慢 5 条。耗时不写进回执。
+- README 加「全量跑太久怎么查」：先看卡住和端口冲突，再看耗时榜，最后才谈并发。
+  固定端口的测试连上本机旧服务然后通过，是真的假绿。
+
+## v1.3.22 — 2026-09-03
+
+卡死和慢跑以前长得一模一样。这是后面所有判断成立的前提。
+
+- **步骤边跑边打输出**，步骤名开跑前就打印。静默超过 60 秒打一行心跳。
+- **`timeout_seconds` / `stall_seconds`**（每步可选，默认不限时）。超时退出码 124，
+  `timed_out` 进回执。超时不进判据快照——造不出假绿，塞进去只会逼所有人重记账。
+- **杀进程树**：POSIX `start_new_session` + `killpg`，Windows `taskkill /T /F`。
+  孤儿 surefire JVM 会占着端口，这个坑会自己复制自己。钩子模板同步修。
+
 ## v1.3.21 — 2026-09-02
 
 - **`adone clean`**：拆除当前项目里的配置、`.adone`、物料目录、我们渲染的技能、

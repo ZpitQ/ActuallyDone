@@ -433,6 +433,117 @@ class JavaAdapter(Adapter):
             argv.extend(["--tests", f"*.{cls}"])
         return argv
 
+    def scoped_test_argv(self, argv: list[str], units: list[str],
+                         *, cwd: Path | None = None) -> list[str] | None:
+        """Maven：插入 -pl <模块> -amd。Gradle 没有 -amd，返回 None。"""
+        if not argv or not units:
+            return None
+        name = Path(argv[0]).name.lower()
+        if "gradle" in name:
+            return None
+        if "mvn" not in name:
+            return None
+        reactor = cwd or self.root
+        modules: list[str] = []
+        for u in units:
+            m = self._maven_module(u, reactor)
+            if m and m not in modules:
+                modules.append(m)
+        if not modules:
+            return None
+        if "-pl" in argv or "--projects" in argv:
+            return None
+        out = list(argv)
+        i = 1
+        while i < len(out):
+            a = out[i]
+            if a.startswith("-") and not a.startswith("-D") and ":" not in a:
+                i += 1
+                if a in {"-T", "-f", "-s", "-P", "--threads", "--file", "--settings"}:
+                    i += 1
+                continue
+            break
+        out[i:i] = ["-pl", ",".join(modules), "-amd"]
+        return out
+
+    def _maven_module(self, unit: str, reactor: Path) -> str | None:
+        p = (self.root / unit).resolve()
+        if p.is_file():
+            p = p.parent
+        reactor = reactor.resolve()
+        root = self.root.resolve()
+        while True:
+            if (p / "pom.xml").is_file():
+                try:
+                    rel = p.relative_to(reactor).as_posix()
+                except ValueError:
+                    try:
+                        rel = p.relative_to(root).as_posix()
+                    except ValueError:
+                        return None
+                return "." if rel in (".", "") else rel
+            if p.parent == p or p == root.parent:
+                break
+            p = p.parent
+        return None
+
+    def slowest_tests(self, cwd: Path, *, since: float | None = None,
+                      n: int = 5) -> list[tuple] | None:
+        files = self._report_files(cwd, since)
+        if not files:
+            return []
+        rows: list[tuple[str, float, str]] = []
+        for p in files:
+            try:
+                root = ET.parse(p).getroot()
+            except ET.ParseError:
+                continue
+            tag = root.tag.rsplit("}", 1)[-1]
+            if tag not in ("testsuite", "testsuites"):
+                continue
+            suites = [root] if tag == "testsuite" else list(root.findall("testsuite"))
+            if tag == "testsuites":
+                suites += [el for el in root.iter()
+                           if el is not root and el.tag.rsplit("}", 1)[-1] == "testsuite"]
+            seen: set[int] = set()
+            mod = self._module_of_report(p)
+            for suite in suites:
+                if id(suite) in seen:
+                    continue
+                seen.add(id(suite))
+                for case in suite.findall("testcase"):
+                    classname = case.get("classname") or suite.get("name") or ""
+                    raw = case.get("name") or ""
+                    key = f"{_simple_class(classname)}#{_clean_xml_name(raw)}"
+                    try:
+                        sec = float(case.get("time") or 0)
+                    except ValueError:
+                        sec = 0.0
+                    rows.append((key, sec, mod))
+        rows.sort(key=lambda r: -r[1])
+        return rows[:max(int(n), 1)]
+
+    def _module_of_report(self, path: Path) -> str:
+        try:
+            rel = path.relative_to(self.root).as_posix()
+        except ValueError:
+            return path.parent.as_posix()
+        for marker in ("/target/", "/build/"):
+            i = rel.find(marker)
+            if i >= 0:
+                return rel[:i] or "."
+        return "."
+
+    def failure_diagnosis(self, output: str) -> str | None:
+        from .base import SPRING_PORT_RE, port_conflict_diagnosis
+        m = SPRING_PORT_RE.search(output or "")
+        if m:
+            return (f"端口 {m.group(1)} 被占。如果冲突发生在第二个及以后的"
+                    f"测试上下文启动时，那是 Spring 测试上下文缓存——"
+                    f"前一个上下文没关、socket 还在它手里，串行也会撞。"
+                    f"改成 @SpringBootTest(webEnvironment = RANDOM_PORT)。")
+        return port_conflict_diagnosis(output)
+
     def iter_test_funcs(self, path: Path) -> list[FuncBody]:
         wanted = {name for _, name, _, _ in self._scan_test_methods(path)}
         if not wanted:

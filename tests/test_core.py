@@ -266,6 +266,16 @@ class TestStepJudging(ProjectCase):
         gate.judge_step(cfg, {"kind": "test", "adapter": "go"}, st)
         self.assertFalse(st.ok)
 
+    def test_端口冲突写进步骤note(self):
+        cfg = self.config()
+        st = gate.Step(name="test", cwd=".", argv=["x"])
+        st.exit_code, st.ok = 1, False
+        st.stdout = "Port 8080 was already in use.\nTests run: 1, Failures: 1, Errors: 0, Skipped: 0\n"
+        gate.judge_step(cfg, {"kind": "test", "adapter": "java"}, st)
+        self.assertFalse(st.ok)
+        self.assertIn("8080", st.note)
+        self.assertIn("RANDOM_PORT", st.note)
+
     def test_coverage_source对不上时仍能从磁盘报告读覆盖率(self):
         from tests.helpers import JAVA_JACOCO_XML
         self.write("reports/jacoco.xml", JAVA_JACOCO_XML)

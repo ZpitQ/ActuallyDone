@@ -243,6 +243,33 @@ class TestJavaAdapter(ProjectCase):
         self.assertIn("jacoco.xml", said)
         self.assertIn("jacoco-maven-plugin", said)
 
+    def test_端口冲突诊断说到Spring上下文缓存(self):
+        said = JavaAdapter(self.root).failure_diagnosis(
+            "APPLICATION FAILED TO START\nPort 8080 was already in use.\n")
+        self.assertIsNotNone(said)
+        self.assertIn("8080", said)
+        self.assertIn("RANDOM_PORT", said)
+
+    def test_通用端口冲突所有适配器都能认(self):
+        from actuallydone.adapters.base import Adapter
+        said = Adapter(self.root).failure_diagnosis("BindException: Address already in use")
+        self.assertIsNotNone(said)
+        self.assertIn("被占", said)
+
+    def test_耗时榜按time属性排序并带模块名(self):
+        self.write("mod-a/target/surefire-reports/TEST-A.xml",
+                   '''<?xml version="1.0"?>
+<testsuite name="A"><testcase name="slow" classname="com.A" time="3.5"/>
+<testcase name="fast" classname="com.A" time="0.01"/></testsuite>''')
+        self.write("mod-b/target/surefire-reports/TEST-B.xml",
+                   '''<?xml version="1.0"?>
+<testsuite name="B"><testcase name="mid" classname="com.B" time="1.2"/></testsuite>''')
+        rows = JavaAdapter(self.root).slowest_tests(self.root, since=0, n=3)
+        self.assertEqual(rows[0][0], "A#slow")
+        self.assertAlmostEqual(rows[0][1], 3.5)
+        self.assertEqual(rows[0][2], "mod-a")
+        self.assertEqual([r[0] for r in rows], ["A#slow", "B#mid", "A#fast"])
+
     def test_jacoco_csv也能算出行覆盖率(self):
         self.write("target/site/jacoco/jacoco.csv",
                    "GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,"

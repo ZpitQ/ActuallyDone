@@ -14,18 +14,30 @@ Agent 贴的日志、勾的清单、说的话都不算数——回执由本模�
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import os
+import queue
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
 from .config import PRUNE_DIRS, Config
 from .model import Step, TestResult
+
+
+# 静默这么久打一行心跳。纯显示，不杀进程，所以给默认值不违反「不许替用户猜阈值」。
+HEARTBEAT_SECONDS = 60
+# 杀进程树时 SIGTERM 之后再等这么久，还活着就 SIGKILL
+_KILL_GRACE = 3
+# 超时步骤的退出码：跟 GNU timeout 一样用 124，绝不能是 0
+_TIMEOUT_EXIT = 124
 
 
 # --------------------------------------------------------------------------- 树哈希
@@ -67,6 +79,45 @@ def tree_hash(cfg: Config) -> tuple[str, int]:
         h.update(p.relative_to(cfg.root).as_posix().encode())
         h.update(p.read_bytes())
     return h.hexdigest(), len(files)
+
+
+def _hash_files(cfg: Config, files: list[Path]) -> str:
+    h = hashlib.sha256()
+    for p in files:
+        h.update(p.relative_to(cfg.root).as_posix().encode())
+        h.update(p.read_bytes())
+    return h.hexdigest()
+
+
+def unit_files(cfg: Config, unit: str) -> list[Path]:
+    """某个 watch_roots 项下的受监视文件。算法与 tree_files 一致，只是不跨单元去重。"""
+    exts = {e if e.startswith(".") else f".{e}"
+            for e in (cfg.get("gate.watch_exts", []) or [])}
+    base = cfg.root / unit
+    if not base.is_dir():
+        return []
+    seen: set[Path] = set()
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d not in PRUNE_DIRS]
+        here = Path(dirpath)
+        for fn in filenames:
+            if os.path.splitext(fn)[1] in exts:
+                seen.add(here / fn)
+    return sorted(seen)
+
+
+def unit_hashes(cfg: Config) -> dict[str, str]:
+    """每个 watch_roots 项一份哈希。总哈希算法一个字不动，老回执还能校验。"""
+    out: dict[str, str] = {}
+    for r in cfg.get("gate.watch_roots", []) or []:
+        files = unit_files(cfg, str(r))
+        out[str(r)] = _hash_files(cfg, files)
+    return out
+
+
+def unit_file_counts(cfg: Config) -> dict[str, int]:
+    return {str(r): len(unit_files(cfg, str(r)))
+            for r in (cfg.get("gate.watch_roots", []) or [])}
 
 
 # --------------------------------------------------------------------------- 执行
@@ -121,6 +172,148 @@ def _ext_candidates(base: Path, exts: tuple[str, ...]) -> list[Path]:
     return [base.with_name(base.name + e) for e in exts] + [base]
 
 
+def _popen_kw() -> dict:
+    """自成进程组，超时才能连 surefire fork 出的 JVM 一起杀掉。"""
+    if os.name == "nt":
+        flag = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        return {"creationflags": flag} if flag else {}
+    return {"start_new_session": True}
+
+
+def kill_tree(proc: subprocess.Popen) -> None:
+    """把步骤的进程树杀掉。孤儿 JVM 会占着端口，下一次全量再冲突一次。"""
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                       capture_output=True)
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+    deadline = time.time() + _KILL_GRACE
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            return
+        time.sleep(0.05)
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
+def _seconds(spec: dict, key: str) -> float | None:
+    raw = spec.get(key)
+    if raw is None or raw == "":
+        return None
+    try:
+        n = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _pump(proc: subprocess.Popen, *, timeout: float | None,
+          stall: float | None) -> tuple[str, bool, str]:
+    """读步骤输出：边打边留全文。按字节块读，不按行——mvn 有时只吐 \\r。
+
+    返回 (全文, 是否超时, 超时说明)。必须用 print 而不是抓 sys.stdout：
+    health --json 用 redirect_stdout 把门禁进度导去 stderr。
+    """
+    if proc.stdout is None:
+        proc.wait()
+        return "", False, ""
+
+    chunks: queue.Queue[bytes | None] = queue.Queue()
+
+    def reader() -> None:
+        try:
+            while True:
+                buf = proc.stdout.read(4096)
+                if not buf:
+                    break
+                chunks.put(buf)
+        finally:
+            chunks.put(None)
+
+    threading.Thread(target=reader, daemon=True).start()
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    parts: list[str] = []
+    t0 = time.time()
+    last_out = t0
+    last_beat = t0
+    timed_out = False
+    why = ""
+
+    while True:
+        now = time.time()
+        if timeout is not None and now - t0 >= timeout:
+            timed_out = True
+            why = (f"超时 {timeout:g} 秒被中断（已跑 {now - t0:.1f}s，"
+                   f"输出 {sum(p.count(chr(10)) for p in parts)} 行）")
+            kill_tree(proc)
+            break
+        if stall is not None and now - last_out >= stall:
+            timed_out = True
+            why = (f"超过 {stall:g} 秒没有新输出，按卡死中断"
+                   f"（已跑 {now - t0:.1f}s）")
+            kill_tree(proc)
+            break
+        if now - last_out >= HEARTBEAT_SECONDS and now - last_beat >= HEARTBEAT_SECONDS:
+            print(f"  … 已跑 {now - t0:.0f}s，{now - last_out:.0f}s 没有新输出",
+                  flush=True)
+            last_beat = now
+        try:
+            item = chunks.get(timeout=0.2)
+        except queue.Empty:
+            continue
+        if item is None:
+            break
+        last_out = time.time()
+        text = decoder.decode(item)
+        if text:
+            print(text, end="", flush=True)
+            parts.append(text)
+
+    tail = decoder.decode(b"", final=True)
+    if tail:
+        print(tail, end="", flush=True)
+        parts.append(tail)
+    # 把杀完之后还堵在队列里的尾巴也捞出来
+    while True:
+        try:
+            item = chunks.get_nowait()
+        except queue.Empty:
+            break
+        if item is None:
+            break
+        text = codecs.decode(item, "utf-8", "replace")
+        if text:
+            print(text, end="", flush=True)
+            parts.append(text)
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        kill_tree(proc)
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+    if proc.stdout is not None:
+        try:
+            proc.stdout.close()
+        except OSError:
+            pass
+    return "".join(parts), timed_out, why
+
+
 def run_step(cfg: Config, spec: dict) -> Step:
     argv = [a.replace("{cover_out}", str(cfg.cover_out)).replace("{root}", str(cfg.root))
             for a in spec["argv"]]
@@ -144,17 +337,24 @@ def run_step(cfg: Config, spec: dict) -> Step:
     if exe is None:
         return dead(f"命令不存在：{argv[0]}（在 PATH 与 {spec.get('cwd', '.')} 下都没找到）")
     try:
-        # errors="replace"：Windows 中文 locale 下 mvn 的输出常常不是 cp936，
-        # 解码炸掉会把「测试失败」误报成「跑不起来」
-        proc = subprocess.run(launch_argv(exe, argv[1:]), cwd=wd,
-                              capture_output=True, text=True, errors="replace")
+        proc = subprocess.Popen(
+            launch_argv(exe, argv[1:]), cwd=wd,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            bufsize=0, **_popen_kw())
     except OSError as e:
         return dead(f"命令跑不起来：{argv[0]}（{e.strerror or e}）")
+    timeout = _seconds(spec, "timeout_seconds")
+    stall = _seconds(spec, "stall_seconds")
+    st.stdout, st.timed_out, why = _pump(proc, timeout=timeout, stall=stall)
     st.seconds = round(time.time() - t0, 2)
-    st.exit_code = proc.returncode
-    st.stdout = proc.stdout + proc.stderr
+    if st.timed_out:
+        st.exit_code = _TIMEOUT_EXIT
+        st.ok = False
+        st.note = why
+    else:
+        st.exit_code = proc.returncode if proc.returncode is not None else _TIMEOUT_EXIT
+        st.ok = st.exit_code == 0
     st.output_tail = "\n".join(st.stdout.splitlines()[-25:])
-    st.ok = proc.returncode == 0
     return st
 
 
@@ -170,22 +370,41 @@ def _fold_test_result(acc: TestResult | None, res: TestResult) -> TestResult:
     keep.passed_names = sorted(set(keep.passed_names) | set(other.passed_names))
     keep.failed_names = sorted(set(keep.failed_names) | set(other.failed_names))
     keep.skipped_names = sorted(set(keep.skipped_names) | set(other.skipped_names))
+    keep.ran_names = sorted(set(keep.ran_names) | set(other.ran_names))
     return keep
+
+
+def _append_note(st: Step, extra: str) -> None:
+    extra = (extra or "").strip()
+    if not extra:
+        return
+    if st.note and extra not in st.note:
+        st.note = f"{st.note}；{extra}"
+    elif not st.note:
+        st.note = extra
 
 
 def judge_step(cfg: Config, spec: dict, st: Step) -> TestResult | None:
     """按 kind 做额外判定。光看退出码会漏掉两类最常见的假绿。"""
     kind = spec.get("kind", "")
+    timed_note = st.note if st.timed_out else ""
 
     if kind == "fmt":
         # 格式化检查工具往往永远退出 0，未格式化的文件名走 stdout
         bad = [ln for ln in st.stdout.splitlines() if ln.strip()]
-        st.ok = st.exit_code == 0 and not bad
+        st.ok = st.exit_code == 0 and not bad and not st.timed_out
         if bad:
             st.note = f"{len(bad)} 个文件未格式化"
+        if timed_note:
+            st.ok = False
+            st.note = timed_note + (f"；{st.note}" if st.note and st.note != timed_note else "")
         return None
 
     if kind != "test":
+        if st.timed_out:
+            st.ok = False
+            if timed_note:
+                st.note = timed_note
         return None
 
     if st.launch_error:
@@ -207,31 +426,87 @@ def judge_step(cfg: Config, spec: dict, st: Step) -> TestResult | None:
         else:
             st.note = ("退出码 0 但解析不出测试结果——要么适配器不认这种输出格式，"
                        "要么测试根本没跑起来。这种「通过」不能作为证据")
-        return res
-
-    for mark in spec.get("invalid_marks", []) or []:
-        if mark in st.stdout:
-            st.ok = False
-            st.note = (f"输出里出现「{mark}」，说明有用例是被条件跳过的，"
-                       f"这轮证据无效")
-            return res
-    if res.failed:
-        st.ok = False
-        st.note = f"{res.failed} 个用例失败"
-    elif res.passed == 0:
-        st.ok = False
-        st.note = "没有任何用例真正跑过"
     else:
-        st.note = (f"{res.passed} 通过 / {res.skipped} 跳过（顶层 {res.skip_top}）"
-                   + (f" / 覆盖率 {res.coverage}%" if res.coverage is not None else ""))
+        if res.ran_names is not None and not res.ran_names:
+            res.ran_names = list(res.passed_names)
+        for mark in spec.get("invalid_marks", []) or []:
+            if mark in st.stdout:
+                st.ok = False
+                st.note = (f"输出里出现「{mark}」，说明有用例是被条件跳过的，"
+                           f"这轮证据无效")
+                _finish_judge(st, timed_note, ad)
+                return res
+        if res.failed:
+            st.ok = False
+            st.note = f"{res.failed} 个用例失败"
+        elif res.passed == 0:
+            st.ok = False
+            st.note = "没有任何用例真正跑过"
+        else:
+            st.note = (f"{res.passed} 通过 / {res.skipped} 跳过（顶层 {res.skip_top}）"
+                       + (f" / 覆盖率 {res.coverage}%" if res.coverage is not None else ""))
+        _print_slowest(ad, cfg.root / st.cwd, st.started_at or None)
+
+    _finish_judge(st, timed_note, ad)
     return res
 
 
-def execute_steps(cfg: Config, skip: list[str] | None = None) -> dict:
+def _finish_judge(st: Step, timed_note: str, ad) -> None:
+    if timed_note:
+        st.ok = False
+        st.note = timed_note + (f"；{st.note}" if st.note and st.note != timed_note else "")
+    if not st.ok:
+        fn = getattr(ad, "failure_diagnosis", None)
+        if callable(fn):
+            said = fn(st.stdout)
+            if said:
+                _append_note(st, said)
+
+
+def _print_slowest(ad, cwd: Path, since: float | None, n: int = 5) -> None:
+    fn = getattr(ad, "slowest_tests", None)
+    if not callable(fn):
+        return
+    rows = fn(cwd, since=since, n=n)
+    if not rows:
+        return
+    print("  最慢的用例：", flush=True)
+    for name, sec, *_rest in rows:
+        print(f"    {sec:.2f}s  {name}", flush=True)
+
+
+def _maybe_scope_spec(cfg: Config, spec: dict, affected: list[str] | None) -> dict:
+    """测试步骤按受影响单元改 argv。做不到就拒绝，不许少跑还装成全量。"""
+    if not affected or spec.get("kind") != "test":
+        return spec
+    from .adapters import get
+    ad = get(spec.get("adapter") or cfg.get("tests.adapter") or "", cfg.root)
+    fn = getattr(ad, "scoped_test_argv", None)
+    if not callable(fn):
+        raise GateError(
+            f"步骤「{spec.get('name')}」的适配器不会按模块缩范围。"
+            f"Gradle 没有 -amd 的等价物。跑全量 adone gate run，不要用 --affected")
+    cwd = cfg.root / (spec.get("cwd") or ".")
+    scoped = fn(list(spec.get("argv") or []), affected, cwd=cwd)
+    if scoped is None:
+        raise GateError(
+            f"步骤「{spec.get('name')}」拼不出只跑 {', '.join(affected)} 的命令。"
+            f"跑全量 adone gate run，不要用 --affected")
+    out = dict(spec)
+    out["argv"] = scoped
+    print(f"  缩范围：{' '.join(scoped)}", flush=True)
+    return out
+
+
+def execute_steps(cfg: Config, skip: list[str] | None = None,
+                  *, affected: list[str] | None = None) -> dict:
     """真跑配置里的每一步，返回原始结果，不落任何盘。
 
     `gate run` 与 `audit --rerun` 共用它：复核者要能跑出自己的一份结果，
     又不能顺手覆盖实现者的回执——那等于把被审的证据抹掉。
+
+    affected 非空时，测试步骤的 argv 会按受影响单元缩范围；缩不了就抛 GateError，
+    不许偷偷少跑。
     """
     skip = skip or []
     started = time.time()
@@ -251,6 +526,8 @@ def execute_steps(cfg: Config, skip: list[str] | None = None) -> dict:
             print(f"  [跳过] {name}（本次回执会被标记为不完整）", flush=True)
             skipped_any = True
             continue
+        spec = _maybe_scope_spec(cfg, spec, affected)
+        print(f"  ── {name} ──", flush=True)
         st = run_step(cfg, spec)
         res = judge_step(cfg, spec, st)
         if res is not None and res.parsed:
@@ -334,7 +611,8 @@ def _coverage_missing_note(cfg: Config, steps: list[Step], source: str) -> str:
             f"确认那一步的输出里有覆盖率，或报告文件写到了磁盘上")
 
 
-def run_gate(cfg: Config, skip: list[str] | None = None) -> int:
+def run_gate(cfg: Config, skip: list[str] | None = None,
+             *, affected: bool = False) -> int:
     problems = cfg.problems()
     if problems:
         print("配置有问题，门禁不跑（跑了也不算数）：", file=sys.stderr)
@@ -342,11 +620,48 @@ def run_gate(cfg: Config, skip: list[str] | None = None) -> int:
             print(f"  - {p}", file=sys.stderr)
         return 2
 
+    now_units = unit_hashes(cfg)
+    source = None
+    changed: list[str] = []
+    carried: list[str] = []
+    if affected:
+        source, err = inheritable_full(cfg)
+        if err:
+            print(err, file=sys.stderr)
+            return 2
+        src_units = (source or {}).get("units") or {}
+        for unit, h in now_units.items():
+            if src_units.get(unit) == h:
+                carried.append(unit)
+            else:
+                changed.append(unit)
+        if not changed:
+            print("没有单元相对可继承的全量回执变过，现有回执仍然有效。"
+                  "要重跑请用 adone gate run（不加 --affected）。")
+            return 0
+        print(f"范围化全量：本轮跑 {len(changed)} 个单元，"
+              f"继承 {len(carried)} 个（来自回执 {source.get('id')}）")
+        for u in changed:
+            print(f"  跑  {u}")
+        for u in carried:
+            print(f"  继承 {u}")
+
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     cfg.receipts_dir.mkdir(parents=True, exist_ok=True)
-    ran = execute_steps(cfg, skip)
+    try:
+        ran = execute_steps(cfg, skip, affected=changed or None)
+    except GateError as e:
+        print(str(e), file=sys.stderr)
+        return 2
     steps = ran["steps"]
     tests, coverage, thr = ran["tests"], ran["coverage"], ran["threshold"]
+    if affected and source is not None:
+        tests = _carry_tests(tests, source)
+        # 部分模块的覆盖率数字不能当全量用，继承源头的
+        cov_src = (source.get("coverage") or {}).get("percent")
+        if cov_src is not None:
+            coverage = cov_src
+        _carry_coverage_step(steps, source, thr)
 
     from .policy import ensure_baseline, snapshot, snapshot_hash
 
@@ -362,6 +677,8 @@ def run_gate(cfg: Config, skip: list[str] | None = None) -> int:
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "complete": ran["complete"],
         "seconds": ran["seconds"],
+        "scope": "affected" if affected else "full",
+        "units": now_units,
         "tree": {"hash": h, "file_count": n,
                  "roots": cfg.get("gate.watch_roots"),
                  "exts": sorted(cfg.get("gate.watch_exts"))},
@@ -375,6 +692,8 @@ def run_gate(cfg: Config, skip: list[str] | None = None) -> int:
         "seq": prev.get("seq", 0) + 1,
         "prev": prev.get("head"),
     }
+    if affected and source is not None:
+        receipt["carried"] = {"from_receipt": source.get("id"), "units": carried}
     receipt["evidence"] = evidence_of(cfg, receipt)
     receipt["self_hash"] = self_hash(receipt)
     path = cfg.receipts_dir / f"receipt-{receipt['id']}.json"
@@ -385,7 +704,8 @@ def run_gate(cfg: Config, skip: list[str] | None = None) -> int:
     prune_receipts(cfg)
 
     print(f"\n回执 {receipt['id']}：{'全绿' if receipt['ok'] else '未通过'}"
-          f"（树 {n} 个文件 / {h[:12]}）")
+          f"（树 {n} 个文件 / {h[:12]}"
+          + ("，范围化" if affected else "") + "）")
     print(f"写入 {path.relative_to(cfg.root)}")
     if not receipt["ok"]:
         print("\n未通过的步骤：")
@@ -393,6 +713,77 @@ def run_gate(cfg: Config, skip: list[str] | None = None) -> int:
             if not s.ok:
                 print(f"--- {s.name} ---\n{s.output_tail}\n")
     return 0 if receipt["ok"] else 1
+
+
+def inheritable_full(cfg: Config) -> tuple[dict | None, str]:
+    """沿证据链找一份可继承的全量绿回执。没有 units 的老回执不能当源头。"""
+    src = find_full_receipt(cfg)
+    if src is None:
+        return None, ("链上没有可继承的全量绿回执。"
+                      "先跑一次 adone gate run（全量），再谈 --affected。")
+    if not (src.get("units") or {}):
+        return None, (f"全量回执 {src.get('id')} 没有单元哈希（v1.4.0 之前写的）。"
+                      f"先跑一次 adone gate run（全量）再谈 --affected。")
+    if not src.get("ok") or not src.get("complete", True):
+        return None, f"全量回执 {src.get('id')} 本身未通过或不完整，不能当继承源头。"
+    return src, ""
+
+
+def find_full_receipt(cfg: Config) -> dict | None:
+    """沿 latest → prev 找最近一份 scope≠affected 且通过的回执。"""
+    cur = load_latest(cfg)
+    seen: set[str] = set()
+    while cur:
+        key = str(cur.get("self_hash") or cur.get("id") or "")
+        if not key or key in seen:
+            break
+        seen.add(key)
+        if (cur.get("ok") and cur.get("complete", True)
+                and cur.get("scope") != "affected"):
+            return cur
+        prev = cur.get("prev")
+        if not prev:
+            break
+        cur = _find_receipt_by_hash(cfg, prev)
+    return None
+
+
+def _carry_tests(ran: TestResult | None, source: dict) -> TestResult:
+    """passed_names = 本轮真跑 ∪ 源头。ran_names 只留本轮。契约校验靠并集。"""
+    src = source.get("tests") or {}
+    inherited = list(src.get("passed_names") or [])
+    if ran is None or not ran.parsed:
+        out = TestResult(
+            passed=len(set(inherited)),
+            failed=0,
+            skipped=int(src.get("skip") or 0),
+            skip_top=int(src.get("skip_top") or 0),
+            passed_names=inherited,
+            ran_names=[],
+            coverage=src.get("coverage"),
+            parsed=True,
+        )
+        return out
+    ran.ran_names = list(ran.passed_names)
+    ran.passed_names = sorted(set(ran.passed_names) | set(inherited))
+    ran.passed = len(set(ran.passed_names))
+    return ran
+
+
+def _carry_coverage_step(steps: list[Step], source: dict, thr) -> None:
+    """部分重跑的覆盖率数字会偏低，覆盖率步骤改成继承源头。"""
+    src_cov = (source.get("coverage") or {}).get("percent")
+    for s in steps:
+        if s.name == "覆盖率":
+            if src_cov is None:
+                s.ok = False
+                s.note = (f"源头回执 {source.get('id')} 也没有覆盖率数字，"
+                          f"范围化全量不能凭空补一份")
+            else:
+                s.ok = thr is None or src_cov >= float(thr)
+                s.note = (f"{src_cov}%（继承自回执 {source.get('id')}，"
+                          f"本轮只跑了部分模块）")
+            return
 
 
 def prune_receipts(cfg: Config) -> None:
@@ -495,11 +886,16 @@ def evidence_of(cfg: Config, receipt: dict) -> dict:
     字段结构给以后的 git 绑定与 CI 签名留好位置——「总分 91」这种数字
     自带可信度标签，比在脚注里写一句免责声明管用。
     """
-    return {
+    ev = {
         "level": "self-reported",
         "policy_locked": _policy_baseline_or_none(cfg) is not None,
         "chained": True,
+        "scope": receipt.get("scope") or "full",
     }
+    carried = receipt.get("carried") or {}
+    if carried.get("from_receipt"):
+        ev["carried_from"] = carried.get("from_receipt")
+    return ev
 
 
 def _policy_baseline_or_none(cfg: Config) -> dict | None:
@@ -520,6 +916,9 @@ def evidence_line(receipt: dict | None) -> str:
     bits = ["自述（本地跑）" if ev.get("level") == "self-reported" else str(ev.get("level")),
             "判据已锁" if ev.get("policy_locked") else "判据未锁",
             "回执链完整" if ev.get("chained") else "不在证据链上"]
+    if ev.get("scope") == "affected":
+        src = ev.get("carried_from") or (receipt.get("carried") or {}).get("from_receipt")
+        bits.append(f"部分重跑（继承自回执 {src}）" if src else "部分重跑")
     return "证据强度：" + " · ".join(bits)
 
 
@@ -575,6 +974,66 @@ def gate_problems(cfg: Config, receipt: dict | None, now_hash: str,
     return problems, details
 
 
+def scope_problems(cfg: Config, receipt: dict | None) -> tuple[list[str], list[str]]:
+    """范围化回执：源头必须在链上且通过，继承单元哈希必须与源头、与当前都一致。"""
+    if receipt is None or receipt.get("scope") != "affected":
+        return [], []
+    problems: list[str] = []
+    details: list[str] = []
+    carried = receipt.get("carried") or {}
+    src_id = carried.get("from_receipt")
+    src = _find_receipt_by_id(cfg, src_id)
+    if src is None:
+        problems.append(f"继承的源头回执 {src_id or '（没写）'} 不在链上："
+                        f"范围化全量不能当完成证据")
+        return problems, details
+    if not src.get("ok") or not src.get("complete", True):
+        problems.append(f"继承的源头回执 {src_id} 本身未通过或不完整")
+    if src.get("scope") == "affected":
+        problems.append(f"继承的源头回执 {src_id} 自己也是范围化的：必须追溯到一份全量绿回执")
+    src_units = src.get("units") or {}
+    rec_units = receipt.get("units") or {}
+    now_units = unit_hashes(cfg)
+    inherited = list(carried.get("units") or [])
+    for u in inherited:
+        if src_units.get(u) != rec_units.get(u):
+            problems.append(f"继承单元 {u} 的哈希与源头回执对不上：它其实改过，不能继承")
+        elif rec_units.get(u) != now_units.get(u):
+            problems.append(f"继承单元 {u} 在回执写出之后又改过")
+    ran_units = [u for u in rec_units if u not in inherited]
+    for u in ran_units:
+        if rec_units.get(u) != now_units.get(u):
+            problems.append(f"本轮跑过的单元 {u} 在回执写出之后又改过")
+    for u in now_units:
+        if u not in rec_units:
+            problems.append(f"当前多了单元 {u}，这份范围化回执没覆盖它")
+    tests = receipt.get("tests") or {}
+    ran_n = len(tests.get("ran_names") or [])
+    passed_n = len(tests.get("passed_names") or [])
+    inherited_n = max(passed_n - ran_n, 0)
+    details.append(f"本轮真跑 {ran_n} 条，继承 {inherited_n} 条（来自回执 {src_id}）")
+    return problems, details
+
+
+def _find_receipt_by_id(cfg: Config, rid: str | None) -> dict | None:
+    if not rid:
+        return None
+    p = cfg.receipts_dir / f"receipt-{rid}.json"
+    if p.is_file():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    for cand in cfg.receipts_dir.glob("receipt-*.json"):
+        try:
+            data = json.loads(cand.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("id") == rid:
+            return data
+    return None
+
+
 def collect_check(cfg: Config, with_integrity: bool = True,
                   spotcheck: int = 0) -> dict:
     """把一次复核的全部判定收成数据，不打印。
@@ -602,6 +1061,10 @@ def collect_check(cfg: Config, with_integrity: bool = True,
     chain_bad, chain_detail = chain_problems(cfg, receipt)
     problems.extend(chain_bad)
     details.extend(chain_detail)
+
+    scope_bad, scope_detail = scope_problems(cfg, receipt)
+    problems.extend(scope_bad)
+    details.extend(scope_detail)
 
     policy_bad, policy_detail = policy_problems(cfg, receipt)
     problems.extend(policy_bad)
@@ -665,3 +1128,59 @@ def check_gate(cfg: Config, as_json: bool = False, explain: bool = False,
     if line and (explain or ok):
         print(line)
     return 0 if ok else 1
+
+
+def cmd_gate_slow(cfg: Config, n: int = 20) -> int:
+    """读最近一轮测试报告，按用例和按模块打印耗时榜。不写回执。"""
+    from .adapters import get
+
+    receipt = load_latest(cfg)
+    cwd = cfg.root
+    adapter = cfg.get("tests.adapter") or ""
+    since: float | None = None
+    if receipt:
+        created = receipt.get("created_at") or ""
+        try:
+            since = datetime.fromisoformat(created).timestamp()
+        except ValueError:
+            since = None
+        for s in receipt.get("steps") or []:
+            if s.get("name") and (s.get("argv") or []):
+                adapter = adapter or ""
+        for spec in cfg.get("gate.step") or []:
+            if spec.get("kind") == "test":
+                cwd = cfg.root / (spec.get("cwd") or ".")
+                adapter = spec.get("adapter") or adapter
+                break
+    else:
+        for spec in cfg.get("gate.step") or []:
+            if spec.get("kind") == "test":
+                cwd = cfg.root / (spec.get("cwd") or ".")
+                adapter = spec.get("adapter") or adapter
+                break
+
+    ad = get(adapter, cfg.root)
+    fn = getattr(ad, "slowest_tests", None)
+    if not callable(fn):
+        print(f"适配器「{ad.name}」不会读用例耗时（目前只有 Java 的 surefire XML 带 time）")
+        return 2
+    rows = fn(cwd, since=since, n=max(int(n), 1))
+    if rows is None:
+        print(f"适配器「{ad.name}」不会读用例耗时")
+        return 2
+    if not rows:
+        print("没有读到带耗时的测试报告。先跑一次门禁，或确认 surefire XML 还在。")
+        return 1
+
+    print(f"最慢的 {len(rows)} 条用例：")
+    by_mod: dict[str, float] = {}
+    for name, sec, *rest in rows:
+        mod = rest[0] if rest else ""
+        print(f"  {sec:8.2f}s  {name}" + (f"  ({mod})" if mod else ""))
+        if mod:
+            by_mod[mod] = by_mod.get(mod, 0.0) + sec
+    if by_mod:
+        print("\n按模块合计：")
+        for mod, sec in sorted(by_mod.items(), key=lambda x: -x[1]):
+            print(f"  {sec:8.2f}s  {mod}")
+    return 0
