@@ -418,6 +418,55 @@ def _qoder_event_has_ours(entries) -> bool:
     return any(qoder_entry_is_ours(h) for h in (entries or []))
 
 
+def _qoder_our_leaves(events: dict) -> list[dict]:
+    """settings.json 里属于我们的那些 `type: command` 叶子。"""
+    found: list[dict] = []
+
+    def walk(obj) -> None:
+        if not isinstance(obj, dict):
+            return
+        inner = obj.get("hooks")
+        if isinstance(inner, list) and inner:
+            for h in inner:
+                walk(h)
+            return
+        if qoder_leaf_is_ours(obj):
+            found.append(obj)
+
+    for entries in (events or {}).values():
+        for entry in (entries or []):
+            walk(entry)
+    return found
+
+
+def _qoder_launch_problems(cfg: Config, leaf: dict) -> list[str]:
+    """这条登记在本机起不起得来。
+
+    Qoder 的 exec 形式直接起可执行文件，不过 shell：命令不在 PATH 上、
+    或 argv 里的脚本路径不存在时，python 以退出码 2 收场。而 PreToolUse 上
+    退出码 2 就是「拒绝」——doctor 说钩子已装，实际每条 shell 命令都被拦。
+    """
+    from .gate import resolve_cmd
+    problems: list[str] = []
+    cmd = str(leaf.get("command") or "")
+    if not cmd:
+        return ["Qoder 登记里有一条 adone 钩子没有 command，Qoder 起不动它"]
+    if resolve_cmd(cmd, cfg.root) is None:
+        problems.append(f"Qoder 钩子命令「{cmd}」在本机找不到：Qoder 起不动它，"
+                        f"钩子会静默失效。装上它，或重渲 "
+                        f"adone install --hooks-only --force --ide qoder")
+    for arg in (leaf.get("args") or []):
+        s = str(arg)
+        if s.startswith("-") or not any(sep in s for sep in ("/", os.sep)):
+            continue
+        p = Path(s)
+        if not (p if p.is_absolute() else cfg.root / p).exists():
+            problems.append(f"Qoder 钩子 argv 里的 {s} 不存在："
+                            f"exec 形式起不来，PreToolUse 上会变成拒绝一切命令。"
+                            f"重渲 adone install --hooks-only --force --ide qoder")
+    return problems
+
+
 def _qoder_hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
     """没装 Qoder 不算问题。settings.json 在但缺 Stop / PreToolUse 才报装了一半。"""
     path = cfg.root / ".qoder" / "settings.json"
@@ -437,6 +486,8 @@ def _qoder_hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
                         "或 PreToolUse 的 adone 登记。重跑 "
                         "adone install --hooks-only --force --ide qoder")
         return lines, problems
+    for leaf in _qoder_our_leaves(events):
+        problems += _qoder_launch_problems(cfg, leaf)
     found = _resolve_adone(cfg.root, adone_entry(cfg), shutil.which("adone") or "")
     if found:
         lines.append(f"  Qoder 钩子：已装，跑门禁时用 {found} hook")
@@ -670,24 +721,34 @@ def our_hooks(cfg: Config | None = None) -> dict:
     }
 
 
+def _qoder_python() -> tuple[str, list[str]]:
+    if os.name == "nt":
+        # py 是官方安装器带的启动器；商店那个 python 别名会打开应用商店
+        return ("py", ["-3"]) if shutil.which("py") else ("python", [])
+    return "python3", []
+
+
 def qoder_hook_argv(name: str, cfg: Config | None = None) -> tuple[str, list[str]]:
-    """Qoder 用 exec 形式：单个可执行文件 + argv，不复制 .exe 进 .cursor/hooks/。"""
+    """Qoder 用 exec 形式：单个可执行文件 + argv，不复制 .exe 进 .cursor/hooks/。
+
+    仓库内入口写成**绝对路径**：exec 形式不过 shell，而钩子进程的工作目录
+    Qoder 没有承诺是项目根。相对路径解不开时 python 以退出码 2 收场，
+    而 PreToolUse 上的退出码 2 正好等于「拒绝」——门禁看着还在，
+    实际每条 shell 命令都被拦下，且理由是一句 python 的报错。
+    """
     if cfg is not None:
         entry = adone_entry(cfg)
         if entry:
-            if os.name == "nt":
-                if shutil.which("py"):
-                    return "py", ["-3", entry, "hook", name]
-                return "python", [entry, "hook", name]
-            return "python3", [entry, "hook", name]
+            py, pre = _qoder_python()
+            return py, [*pre, str(cfg.root / entry), "hook", name]
     on_path = shutil.which("adone") or ""
     if on_path:
+        # .cmd / .bat 不能被 exec：官方要求交给 cmd.exe 代跑
+        if os.name == "nt" and Path(on_path).suffix.lower() in (".cmd", ".bat"):
+            return "cmd.exe", ["/c", on_path, "hook", name]
         return on_path, ["hook", name]
-    if os.name == "nt":
-        if shutil.which("py"):
-            return "py", ["-3", "-m", "actuallydone", "hook", name]
-        return "python", ["-m", "actuallydone", "hook", name]
-    return "python3", ["-m", "actuallydone", "hook", name]
+    py, pre = _qoder_python()
+    return py, [*pre, "-m", "actuallydone", "hook", name]
 
 
 def qoder_hook_handler(name: str, cfg: Config | None = None) -> dict:
@@ -824,12 +885,14 @@ def _install_hooks(cfg: Config, v: dict[str, str], args,
 
 def _install_qoder_hooks(cfg: Config, args) -> int:
     dest = cfg.root / ".qoder" / "settings.json"
-    if dest.exists() and not args.force:
-        print(f"  跳过已存在的 {dest.relative_to(cfg.root)}（要覆盖加 --force，"
-              f"会保留你自己写在里面的其他钩子）；需要的配置是：\n"
-              f"{json.dumps(our_qoder_hooks(cfg), ensure_ascii=False, indent=2)}")
+    existing = _read_json(dest)
+    merged, kept = merge_qoder_hooks(existing, cfg)
+    # 这里刻意不看 --force：合并只替换带我们标记的条目，别人的登记原样留下。
+    # 而 auto 认出 Qoder 的条件之一就是「settings.json 已经在」，
+    # 要 --force 才肯写的话，最常见的那条安装命令会什么都不做还说自己成功了。
+    if dest.is_file() and merged == existing:
+        print(f"  {dest.relative_to(cfg.root)} 里的 adone 登记已是最新，没改")
         return 0
-    merged, kept = merge_qoder_hooks(_read_json(dest), cfg)
     if args.dry_run:
         print(f"  [演练] 将写入 {dest.relative_to(cfg.root)}"
               + (f"（保留其中 {kept} 条不属于 adone 的钩子）" if kept else ""))

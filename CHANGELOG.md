@@ -2,6 +2,31 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## v1.4.1 — 2026-09-03
+
+Qoder 那条路上四处会让门禁静默失效的地方。Cursor 的登记与出口仍然一个字不改。
+
+- **拒绝提交时理由到不了 Agent**：官方只在 `exit 0` 时解析 stdout 的 JSON，
+  `exit 2` 交回 Agent 的是 stderr。原来 `permissionDecisionReason` 只写 stdout，
+  Agent 收到的是一次没有原因的拒绝——它会当成环境抽风，换个说法再提交一次。
+  理由现在同时走 stderr。
+- **一个环境变量就能改掉 Cursor 的出口**：原来只要环境里有 `QODER_HOME` /
+  `QODER_PROJECT_DIR` 就走 Qoder 协议。装过 Qoder 的机器可能把它导在全局 shell 里，
+  于是 Cursor 的 stop 回推变成 exit 2，对话里一个字都收不到。改为 payload 的
+  `hook_event_name` 说了算（Qoder 每个事件都带它），环境只在没有事件名时兜底，
+  且 `CURSOR_PROJECT_DIR` 优先。
+- **每条 shell 命令都解一遍 adone.toml、写一行 hook.log**：Qoder 的 matcher 只到
+  工具名（Bash / Shell），每条 `ls` 都会进 commit-guard。改为先判命令再读配置。
+- **仓库内入口改写绝对路径**：exec 形式不过 shell，而 Qoder 没承诺钩子进程的工作目录
+  是项目根。相对路径解不开时 python 的退出码正好是 2，而 `PreToolUse` 上的 2 就是
+  「拒绝」——每条 shell 命令都被拦，理由还是一句 python 报错。Windows 上 `adone`
+  解析成 `.cmd` / `.bat` 时改走 `cmd.exe /c`（exec 不了批处理）。
+- **`--ide qoder` 不再要 `--force`**：合并只替换带我们标记的条目，别人的登记原样留下；
+  而 auto 认出 Qoder 的条件之一正是「settings.json 已经在」，要 `--force` 才肯写的话，
+  最常见的那条安装命令会什么都不做还说自己成功了。已是最新则明说没改。
+- **`adone doctor` 核 Qoder 登记起不起得来**：命令能否解析、argv 里的脚本是否存在。
+  原来只查事件在不在——这正是 Cursor 侧踩过的坑。
+
 ## v1.4.0 — 2026-09-03
 
 范围化全量：只跑相对上一份全量绿回执变过的模块，串行照旧，工作量降一个数量级。

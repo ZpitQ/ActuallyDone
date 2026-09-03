@@ -142,20 +142,32 @@ def _root() -> Path:
     return find_root(start) or start.resolve()
 
 
-def qoder_detected(payload: dict | None = None) -> bool:
-    """Qoder 协议：环境是 Qoder 开的，或 payload 带 Qoder 的 hook_event_name。"""
+def protocol_for(payload: dict | None = None) -> str:
+    """本轮该按哪边的出口回话。
+
+    payload 说了算：Qoder 每个事件都带 `hook_event_name`（官方的公共字段），
+    值是 PascalCase；Cursor 同一字段写的是 afterFileEdit / stop 这种。
+    只看环境不行——装过 Qoder 的机器可能把 QODER_HOME 导在全局 shell 里，
+    那时 Cursor 的 stop 会被当成 Qoder，回推改成 exit 2，对话里一个字都收不到。
+    """
+    event = ""
+    if isinstance(payload, dict):
+        event = str(payload.get("hook_event_name") or payload.get("event") or "")
+    if event:
+        return "qoder" if event in _QODER_EVENTS else "cursor"
+    # 没有事件名（Cursor 的 stop 就常常只给 status）：谁把我们起起来的谁说话
+    if os.environ.get("CURSOR_PROJECT_DIR"):
+        return "cursor"
     if os.environ.get("QODER_PROJECT_DIR") or os.environ.get("QODER_HOME"):
-        return True
-    if isinstance(payload, dict) and payload.get("hook_event_name") in _QODER_EVENTS:
-        return True
-    return False
+        return "qoder"
+    return "cursor"
 
 
 def _begin(payload: dict | None) -> dict:
     """记下本轮协议。payload 不是 dict 时按空对象，协议仍可能来自环境。"""
     global _protocol
     data = payload if isinstance(payload, dict) else {}
-    _protocol = "qoder" if qoder_detected(data) else "cursor"
+    _protocol = protocol_for(data)
     return data
 
 
@@ -216,6 +228,10 @@ def _emit_qoder(obj: dict) -> int:
                 "permissionDecisionReason": reason,
             }
         })
+        # 理由必须同时走 stderr：官方只在 exit 0 时解析 stdout 的 JSON，
+        # exit 2 交回 Agent 的是 stderr。只写 stdout 的话，Agent 收到的是
+        # 一次没有原因的拒绝——它会以为是环境抽风，然后换个说法再提交一次。
+        print(reason, file=sys.stderr)
         return 2
     _write_stdout({})
     return 0
@@ -469,9 +485,13 @@ def _is_git_commit(command: str) -> bool:
 
 
 def cmd_commit_guard(_args=None) -> int:
-    """beforeShellExecution：git commit（含 --no-verify）必须先有新鲜的全量回执。"""
-    cfg, root = _load()
-    _log(cfg, "beforeShellExecution", "commit-guard launched", root)
+    """拦 git commit（含 --no-verify）：必须先有新鲜的全量回执。
+
+    Cursor 走 beforeShellExecution，matcher 已经把命令收窄到 git commit。
+    Qoder 的 matcher 只能收到工具名（Bash / Shell），每一条 ls 都会进来，
+    所以先判命令、再读配置写日志：否则每敲一条命令都要解一遍 adone.toml，
+    并往 hook.log 里堆一行，真正那条 commit 记录就淹了。
+    """
     payload = _payload()
     command = payload.get("command") or ""
     if not command:
@@ -481,6 +501,8 @@ def cmd_commit_guard(_args=None) -> int:
     if not _is_git_commit(command):
         return _emit({"permission": "allow"})
 
+    cfg, root = _load()
+    _log(cfg, "beforeShellExecution", "commit-guard launched", root)
     if cfg is None:
         _log(cfg, "beforeShellExecution", "找不到 adone.toml，已拒绝提交", root)
         msg = ("找不到 adone.toml，不能在没有完成门禁的情况下提交。"

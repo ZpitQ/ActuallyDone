@@ -1,6 +1,6 @@
 # ActuallyDone - adone
 
-当前版本 **v1.4.0**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.4.1**，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 零第三方依赖，Python 3.11+（用到标准库 `tomllib`）。
 
 <br/><br/>
@@ -215,6 +215,10 @@ GBK 项目上这不是可有可无的：GBK 的尾字节范围含 ASCII，`亄` 
 
 Windows 上升完必须 `adone install --hooks-only --force`，然后确认 command 是 `.exe`，
 新开一轮 Agent 对话后 `.adone\hook.log` 里应出现 `mark-dirty launched`。
+
+Qoder 装的是 `.qoder/settings.json`，用 exec 形式（`command` + `args`），里面是
+安装那台机器的绝对路径，**同样不要入库**：Qoder 不承诺钩子进程的工作目录是项目根，
+相对路径解不开时 `PreToolUse` 会把每条 shell 命令都拦下。改完配置要重启 Qoder。
 
 <br/><br/>
 
