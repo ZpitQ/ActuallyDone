@@ -10,7 +10,7 @@
   `adone_run`、`adone_audit`，复用现有 gate/audit 判定，不接受任意 shell 输入。
 - `adone install --mcp` / `adone uninstall --mcp` 支持 Codex CLI、Cursor、Claude Code，
   配置合并幂等且只清理 ActuallyDone 自己写入的条目。
-- MCP 与 CodeGraph 保持独立；本地回执不能宣称不可伪造，CI 仍是最终可信执行者。
+- 本地回执不能宣称不可伪造，CI 仍是最终可信执行者。
 
 ## v1.4.2 — 2026-09-03
 
