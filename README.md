@@ -152,6 +152,8 @@ ActuallyDone 也提供一个独立的本地 MCP stdio 服务，通过本地服�
 MCP 只是现有门禁和审计核心的 adapter：它不会改变 `adone.toml` 判据、回执格式或现有
 Cursor/Qoder 钩子。
 
+完整的安装、配置、使用和排障说明见 [MCP 安装与使用指南](docs/mcp.md)。
+
 在项目根（或其子目录）启动：
 
 ```bash
@@ -768,4 +770,3 @@ python3 -m unittest
 ```
 
 MIT，见 [LICENSE](LICENSE)。
-
