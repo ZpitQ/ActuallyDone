@@ -12,7 +12,6 @@
 
 ## 非目标
 
-- 不依赖、读取或合并 CodeGraph。
 - 不增加语义代码图、调用图或索引数据库。
 - 不改变现有 `adone.toml` 判据、回执格式和 CI 建议。
 - 不保证 Agent 宿主一定会自动触发测试；MCP 只提供统一能力。
@@ -153,5 +152,5 @@ adone uninstall --mcp --target codex,cursor,claude
 
 在 fork `ZpitQ/ActuallyDone` 的 `codex/mcp-server` 分支开发；完成后运行完整测试，提交
 到 fork，再创建指向原仓库 `iamharvey/ActuallyDone` 的 PR。PR 说明会明确 MCP 只新增独立
-adapter，不改变 CodeGraph 或 ActuallyDone 的职责边界。
+adapter，不改变 ActuallyDone 原有门禁与 hook 语义。
 
