@@ -2,6 +2,16 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 未发布
+
+新增独立的本地 MCP adapter 和首批 Agent 安装器：
+
+- `adone serve --mcp` 通过 stdio 提供 `adone_status`、`adone_check`、`adone_brief`、
+  `adone_run`、`adone_audit`，复用现有 gate/audit 判定，不接受任意 shell 输入。
+- `adone install --mcp` / `adone uninstall --mcp` 支持 Codex CLI、Cursor、Claude Code，
+  配置合并幂等且只清理 ActuallyDone 自己写入的条目。
+- 本地回执不能宣称不可伪造，CI 仍是最终可信执行者。
+
 ## v1.4.2 — 2026-09-03
 
 中文 Windows 上 pre-commit 跑 `gate run` 会 `UnicodeEncodeError: 'gbk' codec can't encode`。
@@ -490,3 +500,4 @@ Java 团队在 Windows 上反馈的两件事。它们是同一类病，和 v1.3.
 - 健康度报告：六个维度汇成一页离线 HTML，只按真跑过的维度计分，跑不了的检查一律标未评估。
 - 适配器：go / node / python / generic，缺能力就标未评估，绝不返回空结果冒充「查过了」。
 - `adone init` / `detect` / `doctor` 零配置上手，`adone install` 把技能与 Cursor 钩子渲染进项目。
+

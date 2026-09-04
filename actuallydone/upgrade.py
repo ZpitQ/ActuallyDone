@@ -208,7 +208,7 @@ def skip_nudge(args) -> bool:
         return True
     if os.environ.get("CI"):
         return True
-    if getattr(args, "cmd", None) in ("hook", "upgrade"):
+    if getattr(args, "cmd", None) in ("hook", "serve", "upgrade"):
         return True
     if getattr(args, "json", False):
         return True
@@ -474,3 +474,4 @@ def cmd_upgrade(args) -> int:
           "钩子把安装时的绝对路径烧进了 ADONE_CMD，换了位置就会失效，"
           "失效的样子和「门禁通过」在终端里一模一样。")
     return 0
+

@@ -119,6 +119,23 @@ def cmd_install(args) -> int:
     return run(_cfg(args), args)
 
 
+def cmd_uninstall(args) -> int:
+    if not getattr(args, "mcp", False):
+        print("uninstall 目前只支持 --mcp", file=sys.stderr)
+        return 2
+    from .agent_targets import DEFAULT_COMMAND, McpInstallOptions, run_target_action
+    from .mcp import resolve_mcp_root
+    root = resolve_mcp_root(getattr(args, "root", None))
+    options = McpInstallOptions(location=args.location, project_root=root,
+                                command=DEFAULT_COMMAND,
+                                dry_run=bool(getattr(args, "dry_run", False)))
+    code, results = run_target_action(args.target, options, uninstall=True)
+    for result in results:
+        prefix = "错误" if result.error else ("演练" if options.dry_run else "完成")
+        print(f"  [{prefix}] {result.target}: {result.message}")
+    return code
+
+
 def cmd_clean(args) -> int:
     from .clean import cmd_clean as run
     return run(args)
@@ -132,6 +149,14 @@ def cmd_upgrade(args) -> int:
 def cmd_hook(args) -> int:
     from .hookrun import cmd_hook as run
     return run(args)
+
+
+def cmd_serve(args) -> int:
+    if not getattr(args, "mcp", False):
+        print("serve 目前只支持 --mcp", file=sys.stderr)
+        return 2
+    from .mcp import resolve_mcp_root, serve_stdio
+    return serve_stdio(resolve_mcp_root(getattr(args, "root", None)))
 
 
 # --------------------------------------------------------------------------- 装配
@@ -253,8 +278,14 @@ def build_parser() -> argparse.ArgumentParser:
     r.set_defaults(func=cmd_requirements)
 
     p = sub.add_parser("install", help="把技能与钩子模板装进项目")
-    p.add_argument("--target", default="cursor", choices=["cursor", "dir"],
-                   help="装到哪个 Agent 平台；dir 表示只写到 --skills-dir")
+    p.add_argument("--target", default=None,
+                   help="旧安装可选 cursor|dir；MCP 安装可用 codex,cursor,claude")
+    p.add_argument("--mcp", action="store_true",
+                   help="安装 MCP server 配置（不加则保持旧技能/钩子安装）")
+    p.add_argument("--location", choices=["global", "local"], default="global",
+                   help="MCP 配置位置，默认 global")
+    p.add_argument("--print-config", nargs="?", const="", metavar="TARGET",
+                   help="只打印 MCP 配置片段，可指定一个或多个逗号分隔 target")
     p.add_argument("--ide", default="auto", choices=["auto", "cursor", "qoder", "all"],
                    help="钩子装到哪个 IDE：auto 看不出 Qoder 就只装 Cursor；"
                         "qoder 只写 .qoder/，不碰 .cursor/")
@@ -268,6 +299,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="只说要做什么，不落盘")
     p.set_defaults(func=cmd_install)
 
+    p = sub.add_parser("uninstall", help="卸载 ActuallyDone 自己写入的 MCP 配置")
+    p.add_argument("--mcp", action="store_true", required=True,
+                   help="卸载 MCP 配置")
+    p.add_argument("--target", default=None,
+                   help="codex,cursor,claude，默认全部")
+    p.add_argument("--location", choices=["global", "local"], default="global")
+    p.add_argument("--root", default=argparse.SUPPRESS,
+                   help="项目根，默认使用 ADONE_PROJECT_DIR 或从当前目录向上查找")
+    p.add_argument("--dry-run", action="store_true", help="只显示将卸载的内容")
+    p.set_defaults(func=cmd_uninstall)
+
     p = sub.add_parser("clean", help="拆除当前项目里的 ActuallyDone（和 init 配套）")
     p.add_argument("--root", help="项目根，默认从当前目录往上找 adone.toml")
     p.add_argument("--yes", action="store_true", help="不交互，直接拆")
@@ -279,6 +321,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="记 dirty 用 mark-dirty，stop/Stop 用 gate-guard，"
                         "拦 git commit 用 commit-guard")
     p.set_defaults(func=cmd_hook)
+
+    p = sub.add_parser("serve", help="启动本地 MCP stdio 服务")
+    p.add_argument("--mcp", action="store_true", required=True,
+                   help="启动 MCP JSON-RPC stdio 服务")
+    p.add_argument("--root", default=argparse.SUPPRESS,
+                   help="项目根，默认使用 ADONE_PROJECT_DIR 或从当前目录向上查找")
+    p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("upgrade", help="从 GitHub 拉最新版并覆盖当前安装")
     p.add_argument("--check", action="store_true",
@@ -320,3 +369,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

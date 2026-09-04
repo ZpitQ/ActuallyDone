@@ -1035,7 +1035,7 @@ def _find_receipt_by_id(cfg: Config, rid: str | None) -> dict | None:
 
 
 def collect_check(cfg: Config, with_integrity: bool = True,
-                  spotcheck: int = 0) -> dict:
+                  spotcheck: int = 0, clear_dirty: bool = True) -> dict:
     """把一次复核的全部判定收成数据，不打印。
 
     `check` 与 `audit` 共用这一份判定：两条命令口径分家，等于给「换个命令再问一次」
@@ -1055,7 +1055,7 @@ def collect_check(cfg: Config, with_integrity: bool = True,
         problems, details = [str(e)], []
     else:
         problems, details = gate_problems(cfg, receipt, now_hash)
-        if not problems and receipt is not None:
+        if clear_dirty and not problems and receipt is not None:
             cfg.dirty.unlink(missing_ok=True)  # 改了又改回来，清掉噪音标记
 
     chain_bad, chain_detail = chain_problems(cfg, receipt)
@@ -1184,3 +1184,4 @@ def cmd_gate_slow(cfg: Config, n: int = 20) -> int:
         for mod, sec in sorted(by_mod.items(), key=lambda x: -x[1]):
             print(f"  {sec:8.2f}s  {mod}")
     return 0
+
