@@ -254,6 +254,14 @@ def _skill_dests(cfg: Config, skills_root: Path, ides: frozenset[str]) -> list[P
 
 
 def cmd_install(cfg: Config, args) -> int:
+    if getattr(args, "mcp", False):
+        return cmd_install_mcp(cfg, args)
+
+    target = getattr(args, "target", None) or "cursor"
+    if target not in {"cursor", "dir"}:
+        print(f"不认识的旧版安装 target：{target}（可选 cursor、dir；MCP 请加 --mcp）",
+              file=sys.stderr)
+        return 2
     v = variables(cfg)
     skills_root = Path(args.skills_dir).resolve() if args.skills_dir else cfg.skills_dir
     hooks_only = getattr(args, "hooks_only", False)
@@ -320,6 +328,36 @@ def cmd_install(cfg: Config, args) -> int:
         print(f"注意：{'、'.join(PROJECT_SKILLS)} 是**空模板**，里面的 TODO 要你自己填。"
               f"它们的价值就在于内容是本项目踩出来的，通用版没有意义。")
     return 0
+
+
+def cmd_install_mcp(cfg: Config, args) -> int:
+    from .agent_targets import (DEFAULT_COMMAND, McpInstallOptions,
+                                print_target_configs, run_target_action)
+
+    location = getattr(args, "location", "global")
+    target_value = getattr(args, "target", None)
+    print_value = getattr(args, "print_config", None)
+    if print_value is not None:
+        requested = print_value or target_value
+        code, output = print_target_configs(
+            requested,
+            McpInstallOptions(location=location, project_root=cfg.root,
+                              command=DEFAULT_COMMAND, dry_run=True),
+        )
+        print(output, end="")
+        return code
+
+    options = McpInstallOptions(
+        location=location,
+        project_root=cfg.root,
+        command=DEFAULT_COMMAND,
+        dry_run=bool(getattr(args, "dry_run", False)),
+    )
+    code, results = run_target_action(target_value, options)
+    for result in results:
+        prefix = "错误" if result.error else ("演练" if options.dry_run else "完成")
+        print(f"  [{prefix}] {result.target}: {result.message}")
+    return code
 
 
 def hooks_report(cfg: Config) -> tuple[list[str], list[str]]:
@@ -1102,3 +1140,4 @@ def _install_git_pre_commit(cfg: Config, args) -> int:
         pass
     print(f"  写入 {where}（本机，不入库：回执不新鲜时跑 gate run --for-commit）")
     return 1
+
