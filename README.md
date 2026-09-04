@@ -148,8 +148,7 @@ adone clean --yes                  # 不交互
 
 ### MCP：让本地 Agent 读取门禁状态
 
-ActuallyDone 也提供一个独立的本地 MCP stdio 服务。它学习了 CodeGraph 的「本地服务 +
-安装器 registry」接入方式，但不依赖、读取或合并 CodeGraph，也不生成代码图或索引。
+ActuallyDone 也提供一个独立的本地 MCP stdio 服务，通过本地服务和安装器 registry 接入。
 MCP 只是现有门禁和审计核心的 adapter：它不会改变 `adone.toml` 判据、回执格式或现有
 Cursor/Qoder 钩子。
 
