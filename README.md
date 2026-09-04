@@ -146,6 +146,49 @@ adone clean                        # 先列出要删的，默认不拆
 adone clean --yes                  # 不交互
 ```
 
+### MCP：让本地 Agent 读取门禁状态
+
+ActuallyDone 也提供一个独立的本地 MCP stdio 服务。它学习了 CodeGraph 的「本地服务 +
+安装器 registry」接入方式，但不依赖、读取或合并 CodeGraph，也不生成代码图或索引。
+MCP 只是现有门禁和审计核心的 adapter：它不会改变 `adone.toml` 判据、回执格式或现有
+Cursor/Qoder 钩子。
+
+在项目根（或其子目录）启动：
+
+```bash
+adone serve --mcp
+```
+
+服务通过 stdin/stdout 使用 JSON-RPC；日志写 stderr。项目根按显式 `--root`、
+`ADONE_PROJECT_DIR`、当前目录向上查找 `adone.toml` 的顺序确定。工具调用不接受任意
+`projectPath`、shell 命令、脚本路径或工作目录。
+
+首批 Agent 安装器：
+
+```bash
+# 全局配置：Codex ~/.codex、Cursor ~/.cursor、Claude ~/.claude.json
+adone install --mcp --target codex,cursor,claude
+
+# 当前项目配置：.codex/config.toml、.cursor/mcp.json、.mcp.json
+adone install --mcp --target codex,cursor,claude --location local
+
+# 只打印配置片段，不落盘
+adone install --mcp --print-config codex
+
+# 只移除 ActuallyDone 自己写入的 MCP 条目和项目 marker
+adone uninstall --mcp --target codex,cursor,claude --location local
+```
+
+Codex 项目级配置受 trust 机制约束；安装后请在 Codex 中信任该项目，否则它可能不会加载
+`.codex/config.toml` 里的 MCP server。
+
+重复安装不会叠加条目；其他 MCP server、TOML/JSON 字段和 marker 外的说明会保留。若
+某个 Agent 已有同名但不是 ActuallyDone 写入的 `adone` 条目，安装器会报告冲突并保留
+原内容。JSON target 会在首次写入条目时在配置同目录留下隐藏的 provenance 文件，
+用于保证精确卸载；已有同值条目也不会被接管。`adone_run` 和 `adone_audit` 会写入本地
+产物，Agent 宿主应把它们当作有副作用操作处理。MCP 只提供统一入口，不能保证宿主自动
+触发测试；本地回执也不是不可伪造证明，最终可信执行者仍应是 CI。
+
 别人写在 `hooks.json` 里的钩子、以及不是 adone 渲染的技能，不会动。
 
 `adone init` 探测出来的项都标着「请确认」。覆盖率下限留空，等你跑完门禁拿实测值回填。
@@ -726,3 +769,4 @@ python3 -m unittest
 ```
 
 MIT，见 [LICENSE](LICENSE)。
+
