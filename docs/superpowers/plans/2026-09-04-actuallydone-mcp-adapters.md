@@ -280,6 +280,6 @@ adone uninstall --mcp --target codex,cursor,claude
 - [ ] **Step 1: Run the complete regression suite:** `python -m unittest -v`.
 - [ ] **Step 2: Run a clean temporary-project transcript for `initialize`, `notifications/initialized`, `tools/list`, `adone_status`, invalid `adone_run`, and `ping`; assert every stdout line parses as JSON and no stderr line is emitted as protocol data.**
 - [ ] **Step 3: Exercise install/uninstall twice for all three targets in both locations and compare snapshots for idempotence and foreign-field preservation.**
-- [ ] **Step 4: Run `git diff --check`, inspect `git diff origin/main...HEAD`, and verify no code graph/index artifact, arbitrary shell argument, or changed legacy hook behavior exists.**
+- [ ] **Step 4: Run `git diff --check`, inspect `git diff origin/main...HEAD`, and verify no arbitrary shell argument or changed legacy hook behavior exists.**
 - [ ] **Step 5: Push the branch with `git push -u origin codex/mcp-server`; then search the upstream repository for its PR template before creating a PR from `ZpitQ:codex/mcp-server` to `iamharvey:main`.**
 
