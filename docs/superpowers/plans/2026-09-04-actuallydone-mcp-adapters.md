@@ -255,7 +255,7 @@ class TestTargetRegistry(unittest.TestCase):
 - Test: `tests/test_mcp_install.py`
 
 **Interfaces:**
-- Documents the standalone relationship to CodeGraph, MCP trust/side-effect boundaries, three install commands, print/uninstall commands, root environment variable, and CI limitation.
+- Documents MCP trust/side-effect boundaries, three install commands, print/uninstall commands, root environment variable, and CI limitation.
 
 - [ ] **Step 1: Add failing documentation assertions only where existing test conventions permit; otherwise record the exact command transcripts in the docs review checklist.**
 - [ ] **Step 2: Add README sections with these commands and expected behavior:**
@@ -268,7 +268,7 @@ adone install --mcp --print-config codex
 adone uninstall --mcp --target codex,cursor,claude
 ```
 
-- [ ] **Step 3: Add a changelog entry stating MCP is an independent adapter, does not import CodeGraph, and cannot make local receipts不可伪造; CI remains authoritative.**
+- [ ] **Step 3: Add a changelog entry stating MCP is an adapter and cannot make local receipts不可伪造; CI remains authoritative.**
 - [ ] **Step 4: Run `python -m unittest` and `python -m compileall -q actuallydone`; expect no failures.**
 - [ ] **Step 5: Commit `docs: document MCP server and agent adapters`.**
 
@@ -280,6 +280,6 @@ adone uninstall --mcp --target codex,cursor,claude
 - [ ] **Step 1: Run the complete regression suite:** `python -m unittest -v`.
 - [ ] **Step 2: Run a clean temporary-project transcript for `initialize`, `notifications/initialized`, `tools/list`, `adone_status`, invalid `adone_run`, and `ping`; assert every stdout line parses as JSON and no stderr line is emitted as protocol data.**
 - [ ] **Step 3: Exercise install/uninstall twice for all three targets in both locations and compare snapshots for idempotence and foreign-field preservation.**
-- [ ] **Step 4: Run `git diff --check`, inspect `git diff origin/main...HEAD`, and verify no CodeGraph import, code graph/index artifact, arbitrary shell argument, or changed legacy hook behavior exists.**
+- [ ] **Step 4: Run `git diff --check`, inspect `git diff origin/main...HEAD`, and verify no code graph/index artifact, arbitrary shell argument, or changed legacy hook behavior exists.**
 - [ ] **Step 5: Push the branch with `git push -u origin codex/mcp-server`; then search the upstream repository for its PR template before creating a PR from `ZpitQ:codex/mcp-server` to `iamharvey:main`.**
 
